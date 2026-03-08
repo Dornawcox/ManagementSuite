@@ -270,13 +270,24 @@ function pageCreds(){
 '<div class="field">',
 '<label>Project URL</label>',
 '<input id="sb-url" value="'+esc(c.url||'')+'" placeholder="https://abcdefghijklm.supabase.co">',
-'<div class="hint">Found at Settings → API → Project URL</div>',
+'<div class="hint">Found at <strong>Settings → API → Project URL</strong></div>',
 '</div>',
 
 '<div class="field">',
 '<label>Anon / Public Key</label>',
 '<input id="sb-key" type="password" value="'+esc(c.anonKey||'')+'" placeholder="eyJhbGci...">',
 '<div class="hint">Settings → API → Project API Keys → <strong>anon public</strong> (safe for browser)</div>',
+'</div>',
+
+'<div class="field">',
+'<label>Redirect URL <span style="font-weight:400;text-transform:none;color:#666;font-size:11px">(required when opening files directly via file://)</span></label>',
+'<input id="sb-redirect" value="'+esc(c.redirectTo||'')+'" placeholder="http://localhost:8080/tuckaway-coop-barn.html">',
+'<div class="hint">',
+'Where Supabase sends users after clicking their magic link. ',
+'If you open HTML files directly (file://) this <strong>must</strong> be set. ',
+'If you serve files via <code>python3 -m http.server 8080</code> use <code>http://localhost:8080/filename.html</code>. ',
+'Must also be added to Supabase → Authentication → URL Configuration → Redirect URLs.',
+'</div>',
 '</div>',
 
 '<div style="display:flex;gap:10px;flex-wrap:wrap">',
@@ -299,6 +310,49 @@ function pageCreds(){
 '</div>',
 '</div>',
 
+'<div class="card" style="border-left:4px solid #ef5350">',
+'<div class="card-header"><div class="card-title">🔗 Supabase Authentication URL Configuration</div></div>',
+'<div style="font-size:13px;color:var(--muted);line-height:1.9;margin-bottom:16px">',
+'Supabase needs to know what URL to redirect to after the user clicks their magic link. ',
+'By default it sends users to <code>localhost:3000</code> which does not exist.',
+'</div>',
+'<div style="display:flex;flex-direction:column;gap:12px">',
+'<div style="background:#111;border-radius:8px;padding:14px">',
+'<div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:#666;margin-bottom:8px">STEP 1 — Set Site URL</div>',
+'<div style="font-size:12px;color:#ccc;line-height:1.7">',
+'Supabase dashboard → <strong style=\"color:#eee\">Authentication → URL Configuration</strong><br>',
+'Change <strong>Site URL</strong> to where you serve your files:<br>',
+'<code style=\"display:block;margin:5px 0;padding:6px 10px;background:#0a0a0a;border-radius:4px\">' +
+'http://localhost:8080</code>',
+'(or your production domain, e.g. <code>https://farm.yourdomain.com</code>)',
+'</div>',
+'</div>',
+'<div style="background:#111;border-radius:8px;padding:14px">',
+'<div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:#666;margin-bottom:8px">STEP 2 — Add Redirect URLs</div>',
+'<div style="font-size:12px;color:#ccc;line-height:1.7">',
+'In the same screen, under <strong style=\"color:#eee\">Redirect URLs</strong>, add a wildcard for your server:<br>',
+'<code style=\"display:block;margin:5px 0;padding:6px 10px;background:#0a0a0a;border-radius:4px\">' +
+'http://localhost:8080/**</code>',
+'This allows any of the three farm sites (barn, kennel, hunters) to receive the magic link callback.',
+'</div>',
+'</div>',
+'<div style="background:#111;border-radius:8px;padding:14px">',
+'<div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:#666;margin-bottom:8px">STEP 3 — Serve your HTML files over HTTP</div>',
+'<div style="font-size:12px;color:#ccc;line-height:1.7">',
+'Open a terminal in the folder that contains your farm HTML files and run:<br>',
+'<code style=\"display:block;margin:5px 0;padding:6px 10px;background:#0a0a0a;border-radius:4px\">' +
+'python3 -m http.server 8080</code>',
+'Then open the sites via <code>http://localhost:8080/tuckaway-coop-barn.html</code> etc.<br>',
+'Leave the terminal running while using the sites. The server only runs on your local machine.',
+'</div>',
+'</div>',
+'</div>',
+'<div style="margin-top:14px;font-size:12px;color:var(--muted)">',
+'If you open the files directly (file://) Supabase cannot redirect back to them. ',
+'The HTTP server is the simplest fix — it is just Python, requires nothing installed.',
+'</div>',
+'</div>',
+
 '<div class="card">',
 '<div class="card-header"><div class="card-title">📋 Setup Checklist</div></div>',
 '<div style="font-size:13px;line-height:2;color:var(--muted)">',
@@ -314,10 +368,14 @@ function pageCreds(){
 }
 
 function saveAndTest(){
-  var url = document.getElementById('sb-url').value.trim();
-  var key = document.getElementById('sb-key').value.trim();
-  if(!url||!key){ showResult('creds-result','Both fields required.','err'); return; }
-  saveCreds(url,key);
+  var url      = document.getElementById('sb-url').value.trim();
+  var key      = document.getElementById('sb-key').value.trim();
+  var redirect = document.getElementById('sb-redirect') ? document.getElementById('sb-redirect').value.trim() : '';
+  if(!url||!key){ showResult('creds-result','Both URL and anon key are required.','err'); return; }
+  // Save all three including optional redirectTo
+  var creds = { url: url.replace(/\/$/,''), anonKey: key };
+  if(redirect) creds.redirectTo = redirect;
+  localStorage.setItem('farmhack-supabase-v1', JSON.stringify(creds));
   _sb = supabase.createClient(url,key);
   showResult('creds-result','Connecting…','info');
   _sb.from('site_config').select('*').limit(1)

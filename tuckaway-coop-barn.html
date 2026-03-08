@@ -391,7 +391,27 @@ function _showLoginScreen(site) {
     AUTH.signInWithMagicLink(email).then(function(r) {
       if (r && r.error) {
         btn.disabled = false; btn.textContent = 'Send Magic Link ✉';
-        alert('Error: ' + r.error.message);
+        var msg = r.error.message || '';
+        if (msg.indexOf('REDIRECT_URL_REQUIRED') === 0) {
+          var errDiv = document.getElementById('fh-login-msg');
+          if (errDiv) {
+            errDiv.style.display = 'block';
+            errDiv.style.background = '#3a1a1a';
+            errDiv.style.borderColor = '#7a2a2a';
+            errDiv.style.color = '#f08080';
+            errDiv.innerHTML = '<strong>⚠ Redirect URL needed</strong><br><br>' +
+              'You opened this file directly (<code>file://</code>). Supabase magic links cannot redirect back to a local file.<br><br>' +
+              '<strong>Option 1</strong> — serve files over HTTP:<br>' +
+              '<code style="display:block;margin:5px 0;padding:4px 8px;background:rgba(0,0,0,.4);border-radius:4px;font-size:11px">' +
+              'python3 -m http.server 8080</code>' +
+              'Then open: <code>http://localhost:8080/' + window.location.pathname.split('/').pop() + '</code><br><br>' +
+              '<strong>Option 2</strong> — open <strong>farmhack-admin.html → Credentials</strong>, enter your Redirect URL and save.';
+          } else {
+            alert(msg.replace('REDIRECT_URL_REQUIRED: ',''));
+          }
+        } else {
+          alert('Error: ' + msg);
+        }
       } else {
         document.getElementById('fh-login-form').style.display = 'none';
         document.getElementById('fh-login-sent').style.display = 'block';
@@ -414,9 +434,33 @@ function _showLoginScreen(site) {
 // Expose signInWithMagicLink on AUTH
 window.AUTH.signInWithMagicLink = function(email) {
   if (!_sb) return Promise.resolve({ error: { message: 'Supabase not initialized' } });
+  // Build a safe redirect URL:
+  //   1. Use a manually stored redirectTo if the user configured one (handles file:// case)
+  //   2. Fall back to window.location.origin + pathname if served over HTTP(S)
+  //   3. Error clearly if on file:// with no configured redirectTo
+  var creds = AUTH.getCreds() || {};
+  var proto = window.location.protocol;
+  var redirectTo;
+  if (creds.redirectTo) {
+    redirectTo = creds.redirectTo;
+  } else if (proto === 'http:' || proto === 'https:') {
+    // Strip hash/query so we land back on the clean page
+    redirectTo = window.location.origin + window.location.pathname;
+  } else {
+    // file:// — Supabase cannot redirect to a file:// URL
+    return Promise.resolve({
+      error: {
+        message: 'REDIRECT_URL_REQUIRED: You are opening this file directly (file://).\n\n' +
+                 'Fix: either serve the files via a local web server\n' +
+                 '(python3 -m http.server 8080 → open http://localhost:8080/filename.html)\n\n' +
+                 'OR open farmhack-admin.html → Credentials → enter your Redirect URL\n' +
+                 '(e.g. http://localhost:8080/tuckaway-coop-barn.html) and save.'
+      }
+    });
+  }
   return _sb.auth.signInWithOtp({
     email: email,
-    options: { emailRedirectTo: window.location.href }
+    options: { emailRedirectTo: redirectTo }
   });
 };
 
