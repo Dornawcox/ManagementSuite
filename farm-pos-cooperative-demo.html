@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valley View Farm Cooperative POS - Demo</title>
+  <meta name="description" content="Cooperative Farm Store POS with multi-vendor consignment support, inventory management, and settlement reporting">
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(145deg, #f8f7f4 0%, #e8e5dc 100%);
+      min-height: 100vh;
+      color: #2c2c2a;
+    }
+    #root { min-height: 100vh; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #a1a1a1; }
+    .loading {
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; font-size: 18px; color: #666;
+    }
+    .loading::after {
+      content: ''; width: 24px; height: 24px; margin-left: 12px;
+      border: 3px solid #e0e0e0; border-top-color: #0f6e56;
+      border-radius: 50%; animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"><div class="loading">Loading Cooperative POS</div></div>
+  
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+    // ============================================
+    // VENDOR / FARM DATA
+    // ============================================
+    const VENDORS = {
+      'farm-store': {
+        id: 'farm-store',
+        name: 'Valley View Farm',
+        type: 'owner',
+        commissionRate: 0, // No commission on own products
+        contact: 'admin@valleyviewfarm.com',
+        paymentMethod: 'internal',
+        color: '#0f6e56',
+        active: true,
+      },
+      'sunny-acres': {
+        id: 'sunny-acres',
+        name: 'Sunny Acres Farm',
+        type: 'consignment',
+        commissionRate: 15, // 15% commission
+        contact: 'jen@sunnyacres.farm',
+        paymentMethod: 'check',
+        paymentTerms: 'net-15',
+        color: '#D85A30',
+        active: true,
+      },
+      'hilltop-dairy': {
+        id: 'hilltop-dairy',
+        name: 'Hilltop Dairy',
+        type: 'consignment',
+        commissionRate: 12, // 12% commission
+        contact: 'mike@hilltopdairy.com',
+        paymentMethod: 'ach',
+        paymentTerms: 'net-30',
+        color: '#185FA5',
+        active: true,
+      },
+      'beekeepers-coop': {
+        id: 'beekeepers-coop',
+        name: "Beekeepers' Cooperative",
+        type: 'consignment',
+        commissionRate: 10, // 10% commission
+        contact: 'hive@beekeeperscoop.org',
+        paymentMethod: 'check',
+        paymentTerms: 'net-15',
+        color: '#BA7517',
+        active: true,
+      },
+      'heritage-meats': {
+        id: 'heritage-meats',
+        name: 'Heritage Meats',
+        type: 'consignment',
+        commissionRate: 18, // 18% commission (higher for meat handling)
+        contact: 'orders@heritagemeats.farm',
+        paymentMethod: 'ach',
+        paymentTerms: 'net-7',
+        color: '#993556',
+        active: true,
+      },
+    };
+
+    // ============================================
+    // PRODUCTS WITH VENDOR ASSIGNMENT
+    // ============================================
+    const INITIAL_PRODUCTS = {
+      vegetables: [
+        { id: 'v1', name: 'Heirloom Tomatoes', price: 4.50, unit: 'lb', unitType: 'weight', stock: 45, image: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=300&h=300&fit=crop', barcode: '0001001', vendorId: 'farm-store', origin: 'Field A', harvestDate: '2026-03-14' },
+        { id: 'v2', name: 'Mixed Salad Greens', price: 6.00, unit: 'bag', unitType: 'each', stock: 28, image: 'https://images.unsplash.com/photo-1556801712-76c8eb07bbc9?w=300&h=300&fit=crop', barcode: '0001002', vendorId: 'farm-store', origin: 'Greenhouse 1', harvestDate: '2026-03-15' },
+        { id: 'v3', name: 'Rainbow Carrots', price: 3.50, unit: 'bunch', unitType: 'bunch', stock: 35, image: 'https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=300&h=300&fit=crop', barcode: '0001003', vendorId: 'sunny-acres', origin: 'Sunny Acres - Field 2', harvestDate: '2026-03-13' },
+        { id: 'v4', name: 'Garlic (Hardneck)', price: 1.50, unit: 'head', unitType: 'each', stock: 60, image: 'https://images.unsplash.com/photo-1540148426945-6cf22a6b2383?w=300&h=300&fit=crop', barcode: '0001004', vendorId: 'sunny-acres', origin: 'Sunny Acres - Field 1', harvestDate: '2026-02-28' },
+        { id: 'v5', name: 'Summer Squash', price: 2.75, unit: 'lb', unitType: 'weight', stock: 30, image: 'https://images.unsplash.com/photo-1563252722-6434563a985d?w=300&h=300&fit=crop', barcode: '0001005', vendorId: 'farm-store', origin: 'Field A', harvestDate: '2026-03-14' },
+        { id: 'v6', name: 'Sweet Bell Peppers', price: 5.00, unit: 'lb', unitType: 'weight', stock: 22, image: 'https://images.unsplash.com/photo-1563565375-f3fdfdbefa83?w=300&h=300&fit=crop', barcode: '0001006', vendorId: 'sunny-acres', origin: 'Sunny Acres - Greenhouse', harvestDate: '2026-03-15' },
+        { id: 'v7', name: 'Red Onions', price: 2.25, unit: 'lb', unitType: 'weight', stock: 50, image: 'https://images.unsplash.com/photo-1518977956812-cd3dbadaaf31?w=300&h=300&fit=crop', barcode: '0001007', vendorId: 'farm-store', origin: 'Field D', harvestDate: '2026-03-10' },
+        { id: 'v8', name: 'Fresh Basil', price: 3.00, unit: 'bunch', unitType: 'bunch', stock: 18, image: 'https://images.unsplash.com/photo-1618164436241-4473940d1f5c?w=300&h=300&fit=crop', barcode: '0001008', vendorId: 'farm-store', origin: 'Greenhouse 1', harvestDate: '2026-03-15' },
+      ],
+      fruit: [
+        { id: 'f1', name: 'Honeycrisp Apples', price: 3.75, unit: 'lb', unitType: 'weight', stock: 80, image: 'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=300&h=300&fit=crop', barcode: '0002001', vendorId: 'sunny-acres', origin: 'Sunny Acres - Orchard', harvestDate: '2026-03-01' },
+        { id: 'f2', name: 'Freestone Peaches', price: 4.25, unit: 'lb', unitType: 'weight', stock: 40, image: 'https://images.unsplash.com/photo-1595124224150-0c9ae26316fc?w=300&h=300&fit=crop', barcode: '0002002', vendorId: 'farm-store', origin: 'Orchard South', harvestDate: '2026-03-12' },
+        { id: 'f3', name: 'Fresh Blueberries', price: 5.50, unit: 'pint', unitType: 'pint', stock: 25, image: 'https://images.unsplash.com/photo-1498557850523-fd3d118b962e?w=300&h=300&fit=crop', barcode: '0002003', vendorId: 'farm-store', origin: 'Berry Patch', harvestDate: '2026-03-14' },
+        { id: 'f4', name: 'Strawberries', price: 7.00, unit: 'quart', unitType: 'quart', stock: 18, image: 'https://images.unsplash.com/photo-1464965911861-746a04b4bca6?w=300&h=300&fit=crop', barcode: '0002004', vendorId: 'sunny-acres', origin: 'Sunny Acres - Berry Field', harvestDate: '2026-03-15' },
+      ],
+      eggs: [
+        { id: 'e1', name: 'Farm Fresh Eggs', price: 6.00, unit: 'dozen', unitType: 'dozen', stock: 45, image: 'https://images.unsplash.com/photo-1582722872445-44dc5f7e3c8f?w=300&h=300&fit=crop', barcode: '0003001', vendorId: 'farm-store', origin: 'Chicken Coop A', harvestDate: '2026-03-15' },
+        { id: 'e2', name: 'Duck Eggs', price: 8.00, unit: 'half-dozen', unitType: 'half-dozen', stock: 12, image: 'https://images.unsplash.com/photo-1569127959161-2b1297b2d9a6?w=300&h=300&fit=crop', barcode: '0003002', vendorId: 'sunny-acres', origin: 'Sunny Acres - Duck Pond', harvestDate: '2026-03-14' },
+        { id: 'e3', name: 'Quail Eggs', price: 6.50, unit: 'dozen', unitType: 'dozen', stock: 8, image: 'https://images.unsplash.com/photo-1598965675045-45c5e72c7d05?w=300&h=300&fit=crop', barcode: '0003003', vendorId: 'farm-store', origin: 'Quail Aviary', harvestDate: '2026-03-15' },
+      ],
+      dairy: [
+        { id: 'd1', name: 'Raw Milk', price: 12.00, unit: 'gallon', unitType: 'gallon', stock: 15, image: 'https://images.unsplash.com/photo-1563636619-e9143da7973b?w=300&h=300&fit=crop', barcode: '0004001', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy', harvestDate: '2026-03-15' },
+        { id: 'd2', name: 'Aged Goat Cheese', price: 9.50, unit: '8oz', unitType: 'each', stock: 20, image: 'https://images.unsplash.com/photo-1559561853-08451507cbe7?w=300&h=300&fit=crop', barcode: '0004002', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy Creamery', harvestDate: '2026-03-01' },
+        { id: 'd3', name: 'Cultured Butter', price: 8.00, unit: 'lb', unitType: 'each', stock: 25, image: 'https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=300&h=300&fit=crop', barcode: '0004003', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy Creamery', harvestDate: '2026-03-10' },
+        { id: 'd4', name: 'Plain Yogurt', price: 5.50, unit: 'quart', unitType: 'quart', stock: 18, image: 'https://images.unsplash.com/photo-1488477181946-6428a0291777?w=300&h=300&fit=crop', barcode: '0004004', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy', harvestDate: '2026-03-14' },
+      ],
+      meat: [
+        { id: 'm1', name: 'Ground Beef (80/20)', price: 8.50, unit: 'lb', unitType: 'weight', stock: 30, image: 'https://images.unsplash.com/photo-1602470520998-f4a52199a3d6?w=300&h=300&fit=crop', barcode: '0005001', vendorId: 'heritage-meats', origin: 'Heritage Meats', harvestDate: '2026-03-05' },
+        { id: 'm2', name: 'Whole Chicken', price: 5.75, unit: 'lb', unitType: 'weight', stock: 18, image: 'https://images.unsplash.com/photo-1604503468506-a8da13d82791?w=300&h=300&fit=crop', barcode: '0005002', vendorId: 'farm-store', origin: 'Pasture 2', harvestDate: '2026-03-10' },
+        { id: 'm3', name: 'Pork Chops', price: 9.00, unit: 'lb', unitType: 'weight', stock: 22, image: 'https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=300&h=300&fit=crop', barcode: '0005003', vendorId: 'heritage-meats', origin: 'Heritage Meats', harvestDate: '2026-03-08' },
+        { id: 'm4', name: 'Lamb Shoulder', price: 12.00, unit: 'lb', unitType: 'weight', stock: 12, image: 'https://images.unsplash.com/photo-1608039829572-25e8182a7e5c?w=300&h=300&fit=crop', barcode: '0005004', vendorId: 'heritage-meats', origin: 'Heritage Meats', harvestDate: '2026-03-06' },
+      ],
+      preserves: [
+        { id: 'p1', name: 'Strawberry Jam', price: 7.50, unit: 'jar', unitType: 'each', stock: 35, image: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=300&h=300&fit=crop', barcode: '0006001', vendorId: 'farm-store', origin: 'Farm Kitchen', harvestDate: '2026-02-15' },
+        { id: 'p2', name: 'Dill Pickles', price: 6.00, unit: 'jar', unitType: 'each', stock: 28, image: 'https://images.unsplash.com/photo-1589621316382-008455b857cd?w=300&h=300&fit=crop', barcode: '0006002', vendorId: 'sunny-acres', origin: 'Sunny Acres Kitchen', harvestDate: '2026-02-20' },
+        { id: 'p3', name: 'Wildflower Honey', price: 12.00, unit: 'lb', unitType: 'each', stock: 20, image: 'https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=300&h=300&fit=crop', barcode: '0006003', vendorId: 'beekeepers-coop', origin: "Beekeepers' Coop", harvestDate: '2026-01-30' },
+        { id: 'p4', name: 'Apple Cider Vinegar', price: 8.00, unit: 'bottle', unitType: 'each', stock: 15, image: 'https://images.unsplash.com/photo-1608397528960-e8e99c9d3f1c?w=300&h=300&fit=crop', barcode: '0006004', vendorId: 'farm-store', origin: 'Farm Kitchen', harvestDate: '2026-01-15' },
+        { id: 'p5', name: 'Maple Syrup', price: 18.00, unit: 'pint', unitType: 'pint', stock: 10, image: 'https://images.unsplash.com/photo-1589496933738-f5c27bc146e3?w=300&h=300&fit=crop', barcode: '0006005', vendorId: 'farm-store', origin: 'Sugar Bush', harvestDate: '2026-03-01' },
+        { id: 'p6', name: 'Raw Honeycomb', price: 15.00, unit: 'piece', unitType: 'each', stock: 8, image: 'https://images.unsplash.com/photo-1558642452-9d2a7deb7f62?w=300&h=300&fit=crop', barcode: '0006006', vendorId: 'beekeepers-coop', origin: "Beekeepers' Coop", harvestDate: '2026-02-15' },
+      ],
+    };
+
+    const CATEGORIES = [
+      { id: 'vegetables', name: 'Vegetables', icon: '🥬', color: '#0F6E56' },
+      { id: 'fruit', name: 'Fruit', icon: '🍎', color: '#D85A30' },
+      { id: 'eggs', name: 'Eggs', icon: '🥚', color: '#BA7517' },
+      { id: 'dairy', name: 'Dairy', icon: '🧀', color: '#185FA5' },
+      { id: 'meat', name: 'Meat', icon: '🥩', color: '#993556' },
+      { id: 'preserves', name: 'Preserves', icon: '🍯', color: '#534AB7' },
+    ];
+
+    const UNIT_TYPES = [
+      { id: 'weight', name: 'By Weight', units: ['lb', 'oz', 'kg', 'g'], requiresScale: true },
+      { id: 'each', name: 'Each/Unit', units: ['each', 'head', 'jar', 'bottle', '8oz', '16oz', 'piece'], requiresScale: false },
+      { id: 'bunch', name: 'Bunch', units: ['bunch', 'bundle'], requiresScale: false },
+      { id: 'dozen', name: 'Dozen', units: ['dozen', 'half-dozen'], requiresScale: false },
+      { id: 'pint', name: 'Pint', units: ['pint', 'half-pint'], requiresScale: false },
+      { id: 'quart', name: 'Quart', units: ['quart'], requiresScale: false },
+      { id: 'gallon', name: 'Gallon', units: ['gallon', 'half-gallon'], requiresScale: false },
+      { id: 'bag', name: 'Bag', units: ['bag', 'small bag', 'large bag'], requiresScale: false },
+    ];
+
+    // Sample sales history for settlement calculations
+    const SAMPLE_SALES = [
+      { id: 's1', date: '2026-03-14', items: [
+        { productId: 'v3', name: 'Rainbow Carrots', vendorId: 'sunny-acres', quantity: 3, price: 3.50, total: 10.50 },
+        { productId: 'd1', name: 'Raw Milk', vendorId: 'hilltop-dairy', quantity: 2, price: 12.00, total: 24.00 },
+      ], paymentMethod: 'card', total: 34.50 },
+      { id: 's2', date: '2026-03-14', items: [
+        { productId: 'p3', name: 'Wildflower Honey', vendorId: 'beekeepers-coop', quantity: 1, price: 12.00, total: 12.00 },
+        { productId: 'm1', name: 'Ground Beef', vendorId: 'heritage-meats', quantity: 2.5, price: 8.50, total: 21.25, isWeight: true },
+      ], paymentMethod: 'cash', total: 33.25 },
+      { id: 's3', date: '2026-03-15', items: [
+        { productId: 'v6', name: 'Sweet Bell Peppers', vendorId: 'sunny-acres', quantity: 1.8, price: 5.00, total: 9.00, isWeight: true },
+        { productId: 'd2', name: 'Aged Goat Cheese', vendorId: 'hilltop-dairy', quantity: 2, price: 9.50, total: 19.00 },
+        { productId: 'v1', name: 'Heirloom Tomatoes', vendorId: 'farm-store', quantity: 3.2, price: 4.50, total: 14.40, isWeight: true },
+      ], paymentMethod: 'card', total: 42.40 },
+    ];
+
+    // ============================================
+    // MAIN APP COMPONENT
+    // ============================================
+    function FarmStorePOS() {
+      const [view, setView] = useState('operator');
+      const [products, setProducts] = useState(INITIAL_PRODUCTS);
+      const [vendors, setVendors] = useState(VENDORS);
+      const [cart, setCart] = useState([]);
+      const [selectedCategory, setSelectedCategory] = useState('vegetables');
+      const [showAddProduct, setShowAddProduct] = useState(false);
+      const [showMobileApp, setShowMobileApp] = useState(false);
+      const [showPayment, setShowPayment] = useState(false);
+      const [showBarcodePreview, setShowBarcodePreview] = useState(null);
+      const [showVendorSettings, setShowVendorSettings] = useState(false);
+      const [showSettlement, setShowSettlement] = useState(false);
+      const [scaleProduct, setScaleProduct] = useState(null);
+      const [weight, setWeight] = useState(0);
+      const [stable, setStable] = useState(true);
+      const [language, setLanguage] = useState('en');
+      const [sales, setSales] = useState(SAMPLE_SALES);
+      const [vendorFilter, setVendorFilter] = useState('all');
+      const [scannerInput, setScannerInput] = useState('');
+
+      // Simulated scale
+      const simulateWeigh = useCallback(() => {
+        setStable(false);
+        const targetWeight = (Math.random() * 3 + 0.5).toFixed(2);
+        let current = 0;
+        const interval = setInterval(() => {
+          current += parseFloat(targetWeight) / 10;
+          if (current >= parseFloat(targetWeight)) {
+            setWeight(parseFloat(targetWeight));
+            setStable(true);
+            clearInterval(interval);
+          } else {
+            setWeight(parseFloat(current.toFixed(2)));
+          }
+        }, 100);
+      }, []);
+
+      const findProductByBarcode = (barcode) => {
+        for (const category of Object.keys(products)) {
+          const product = products[category].find(p => p.barcode === barcode);
+          if (product) return { product, category };
+        }
+        return null;
+      };
+
+      const addToCart = (product, quantity, weightValue = null) => {
+        const isWeight = product.unitType === 'weight';
+        const actualQuantity = weightValue || quantity;
+        const lineTotal = isWeight ? product.price * actualQuantity : product.price * quantity;
+        const vendor = vendors[product.vendorId];
+        
+        if (!isWeight) {
+          const existingIndex = cart.findIndex(item => item.id === product.id);
+          if (existingIndex >= 0) {
+            const newCart = [...cart];
+            newCart[existingIndex].quantity += quantity;
+            newCart[existingIndex].total = newCart[existingIndex].quantity * product.price;
+            setCart(newCart);
+            return;
+          }
+        }
+        
+        setCart([...cart, {
+          ...product,
+          quantity: isWeight ? actualQuantity : quantity,
+          total: lineTotal,
+          isWeight,
+          vendorName: vendor?.name || 'Unknown',
+          vendorColor: vendor?.color || '#666',
+          commissionRate: vendor?.commissionRate || 0,
+        }]);
+      };
+
+      const addProduct = (newProduct) => {
+        const category = newProduct.category;
+        setProducts(prev => ({
+          ...prev,
+          [category]: [...prev[category], { ...newProduct, id: `${category[0]}${Date.now()}` }]
+        }));
+        setShowAddProduct(false);
+      };
+
+      const updateStock = (barcode, quantity, action = 'add') => {
+        const result = findProductByBarcode(barcode);
+        if (result) {
+          setProducts(prev => ({
+            ...prev,
+            [result.category]: prev[result.category].map(p =>
+              p.barcode === barcode
+                ? { ...p, stock: action === 'add' ? p.stock + quantity : p.stock - quantity }
+                : p
+            )
+          }));
+          return true;
+        }
+        return false;
+      };
+
+      // Calculate settlement data
+      const calculateSettlement = useMemo(() => {
+        const settlement = {};
+        
+        // Initialize all vendors
+        Object.values(vendors).forEach(v => {
+          settlement[v.id] = {
+            vendor: v,
+            grossSales: 0,
+            commission: 0,
+            netPayable: 0,
+            itemsSold: 0,
+            transactions: [],
+          };
+        });
+
+        // Process all sales
+        sales.forEach(sale => {
+          sale.items.forEach(item => {
+            if (settlement[item.vendorId]) {
+              const vendor = vendors[item.vendorId];
+              const commission = item.total * (vendor.commissionRate / 100);
+              settlement[item.vendorId].grossSales += item.total;
+              settlement[item.vendorId].commission += commission;
+              settlement[item.vendorId].netPayable += (item.total - commission);
+              settlement[item.vendorId].itemsSold += item.quantity;
+              settlement[item.vendorId].transactions.push({
+                date: sale.date,
+                item: item.name,
+                quantity: item.quantity,
+                total: item.total,
+                commission,
+              });
+            }
+          });
+        });
+
+        return settlement;
+      }, [sales, vendors]);
+
+      const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
+
+      // Group cart by vendor for receipt
+      const cartByVendor = useMemo(() => {
+        const grouped = {};
+        cart.forEach(item => {
+          if (!grouped[item.vendorId]) {
+            grouped[item.vendorId] = {
+              vendor: vendors[item.vendorId],
+              items: [],
+              subtotal: 0,
+            };
+          }
+          grouped[item.vendorId].items.push(item);
+          grouped[item.vendorId].subtotal += item.total;
+        });
+        return grouped;
+      }, [cart, vendors]);
+
+      // ============================================
+      // STYLES
+      // ============================================
+      const styles = {
+        app: {
+          fontFamily: '"Source Sans 3", -apple-system, BlinkMacSystemFont, sans-serif',
+          background: 'linear-gradient(145deg, #f8f7f4 0%, #e8e5dc 100%)',
+          minHeight: '100vh',
+          color: '#2c2c2a',
+        },
+        header: {
+          background: 'linear-gradient(90deg, #1a4d3e 0%, #0f6e56 50%, #1a8a6d 100%)',
+          color: 'white',
+          padding: '12px 24px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+          flexWrap: 'wrap',
+          gap: '12px',
+        },
+        logo: { fontSize: '18px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '10px' },
+        tabs: { display: 'flex', gap: '4px', flexWrap: 'wrap' },
+        tab: {
+          padding: '8px 12px',
+          borderRadius: '6px',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: '11px',
+          fontWeight: '600',
+          transition: 'all 0.2s',
+          fontFamily: 'inherit',
+        },
+        tabActive: { background: 'white', color: '#0f6e56' },
+        tabInactive: { background: 'rgba(255,255,255,0.15)', color: 'white' },
+        main: {
+          display: 'grid',
+          gridTemplateColumns: '1fr 400px',
+          gap: '20px',
+          padding: '20px',
+          maxWidth: '1600px',
+          margin: '0 auto',
+        },
+        card: {
+          background: 'white',
+          borderRadius: '14px',
+          padding: '20px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+        },
+        input: {
+          width: '100%',
+          padding: '12px 14px',
+          border: '2px solid #e0ddd5',
+          borderRadius: '8px',
+          fontSize: '14px',
+          boxSizing: 'border-box',
+          fontFamily: 'inherit',
+        },
+        button: {
+          padding: '10px 16px',
+          borderRadius: '8px',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: '13px',
+          fontWeight: '600',
+          transition: 'all 0.2s',
+          fontFamily: 'inherit',
+        },
+        primaryBtn: { background: 'linear-gradient(135deg, #0f6e56 0%, #1a8a6d 100%)', color: 'white' },
+        secondaryBtn: { background: '#f0efeb', color: '#444' },
+        dangerBtn: { background: '#fef2f2', color: '#b91c1c' },
+        categories: { display: 'flex', gap: '6px', marginBottom: '16px', flexWrap: 'wrap' },
+        categoryBtn: {
+          padding: '8px 14px',
+          borderRadius: '16px',
+          border: '2px solid',
+          cursor: 'pointer',
+          fontSize: '12px',
+          fontWeight: '600',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '5px',
+          transition: 'all 0.2s',
+          fontFamily: 'inherit',
+        },
+        productGrid: {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+          gap: '12px',
+        },
+        productCard: {
+          background: '#fafaf8',
+          border: '1px solid #e8e5dc',
+          borderRadius: '12px',
+          padding: '12px',
+          cursor: 'pointer',
+          transition: 'all 0.2s',
+          textAlign: 'center',
+          position: 'relative',
+        },
+        productImage: {
+          width: '100%',
+          height: '90px',
+          objectFit: 'cover',
+          borderRadius: '8px',
+          marginBottom: '8px',
+        },
+        vendorBadge: {
+          position: 'absolute',
+          top: '8px',
+          left: '8px',
+          padding: '3px 8px',
+          borderRadius: '10px',
+          fontSize: '9px',
+          fontWeight: '600',
+          color: 'white',
+          maxWidth: '80%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+        modal: {
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px',
+        },
+        modalContent: {
+          background: 'white',
+          borderRadius: '16px',
+          padding: '24px',
+          width: '100%',
+          maxWidth: '600px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+        },
+      };
+
+      const isMobile = typeof window !== 'undefined' && window.innerWidth < 1000;
+
+      // ============================================
+      // ADD PRODUCT MODAL (WITH VENDOR)
+      // ============================================
+      const AddProductModal = () => {
+        const [form, setForm] = useState({
+          name: '',
+          price: '',
+          category: 'vegetables',
+          unitType: 'each',
+          unit: 'each',
+          stock: '',
+          barcode: `00${Date.now().toString().slice(-5)}`,
+          image: '',
+          origin: '',
+          vendorId: 'farm-store',
+        });
+        const fileInputRef = useRef();
+
+        const selectedUnitType = UNIT_TYPES.find(u => u.id === form.unitType);
+
+        return (
+          <div style={styles.modal} onClick={() => setShowAddProduct(false)}>
+            <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 20px', fontSize: '20px' }}>➕ Add New Product</h2>
+              
+              <div style={{ display: 'grid', gap: '14px' }}>
+                {/* Vendor Selection */}
+                <div style={{ background: '#f0fdf4', padding: '14px', borderRadius: '10px', border: '2px solid #0f6e56' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: '#0f6e56', marginBottom: '8px', display: 'block' }}>
+                    🏪 Product Owner / Vendor
+                  </label>
+                  <select
+                    style={{ ...styles.input, background: 'white' }}
+                    value={form.vendorId}
+                    onChange={e => setForm({ ...form, vendorId: e.target.value })}
+                  >
+                    {Object.values(vendors).map(v => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} {v.type === 'owner' ? '(Farm Store)' : `(Consignment - ${v.commissionRate}%)`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <input
+                  style={styles.input}
+                  placeholder="Product name *"
+                  value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })}
+                />
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: '#666', marginBottom: '4px', display: 'block' }}>Category</label>
+                    <select
+                      style={styles.input}
+                      value={form.category}
+                      onChange={e => setForm({ ...form, category: e.target.value })}
+                    >
+                      {CATEGORIES.map(c => (
+                        <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', color: '#666', marginBottom: '4px', display: 'block' }}>Price *</label>
+                    <input
+                      style={styles.input}
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.price}
+                      onChange={e => setForm({ ...form, price: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: '#666', marginBottom: '4px', display: 'block' }}>Unit Type</label>
+                    <select
+                      style={styles.input}
+                      value={form.unitType}
+                      onChange={e => {
+                        const unitType = UNIT_TYPES.find(u => u.id === e.target.value);
+                        setForm({ ...form, unitType: e.target.value, unit: unitType.units[0] });
+                      }}
+                    >
+                      {UNIT_TYPES.map(u => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', color: '#666', marginBottom: '4px', display: 'block' }}>Unit</label>
+                    <select
+                      style={styles.input}
+                      value={form.unit}
+                      onChange={e => setForm({ ...form, unit: e.target.value })}
+                    >
+                      {selectedUnitType?.units.map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', color: '#666', marginBottom: '4px', display: 'block' }}>Stock</label>
+                    <input
+                      style={styles.input}
+                      type="number"
+                      placeholder="0"
+                      value={form.stock}
+                      onChange={e => setForm({ ...form, stock: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <input
+                  style={styles.input}
+                  placeholder="Origin / Location"
+                  value={form.origin}
+                  onChange={e => setForm({ ...form, origin: e.target.value })}
+                />
+
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }}
+                    onClick={() => setShowAddProduct(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    style={{ ...styles.button, ...styles.primaryBtn, flex: 2 }}
+                    onClick={() => {
+                      if (form.name && form.price) {
+                        addProduct({
+                          ...form,
+                          price: parseFloat(form.price),
+                          stock: parseInt(form.stock) || 0,
+                          image: form.image || 'https://images.unsplash.com/photo-1518843875459-f738682238a6?w=300&h=300&fit=crop',
+                          harvestDate: new Date().toISOString().split('T')[0],
+                        });
+                      }
+                    }}
+                  >
+                    Add Product
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // VENDOR MANAGEMENT MODAL
+      // ============================================
+      const VendorSettingsModal = () => {
+        const [selectedVendor, setSelectedVendor] = useState(null);
+        const [editForm, setEditForm] = useState({});
+
+        return (
+          <div style={styles.modal} onClick={() => setShowVendorSettings(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 20px', fontSize: '20px' }}>🏪 Vendor / Consignment Management</h2>
+              
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {Object.values(vendors).map(vendor => (
+                  <div
+                    key={vendor.id}
+                    style={{
+                      padding: '16px',
+                      borderRadius: '12px',
+                      border: `2px solid ${vendor.color}`,
+                      background: vendor.type === 'owner' ? '#f0fdf4' : 'white',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                          <div style={{
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '50%',
+                            background: vendor.color,
+                          }} />
+                          <span style={{ fontWeight: '600', fontSize: '15px' }}>{vendor.name}</span>
+                          <span style={{
+                            padding: '3px 8px',
+                            borderRadius: '10px',
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            background: vendor.type === 'owner' ? '#dcfce7' : '#fef3c7',
+                            color: vendor.type === 'owner' ? '#166534' : '#92400e',
+                          }}>
+                            {vendor.type === 'owner' ? 'Farm Store' : 'Consignment'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#666' }}>
+                          Contact: {vendor.contact}
+                        </div>
+                        {vendor.type === 'consignment' && (
+                          <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+                            Payment: {vendor.paymentMethod.toUpperCase()} • {vendor.paymentTerms}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '24px', fontWeight: '700', color: vendor.color }}>
+                          {vendor.commissionRate}%
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#666' }}>Commission</div>
+                      </div>
+                    </div>
+                    
+                    {/* Products from this vendor */}
+                    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #eee' }}>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px' }}>Products:</div>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {Object.values(products).flat().filter(p => p.vendorId === vendor.id).slice(0, 5).map(p => (
+                          <span key={p.id} style={{
+                            padding: '4px 8px',
+                            background: '#f5f5f5',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                          }}>
+                            {p.name}
+                          </span>
+                        ))}
+                        {Object.values(products).flat().filter(p => p.vendorId === vendor.id).length > 5 && (
+                          <span style={{ padding: '4px 8px', fontSize: '11px', color: '#888' }}>
+                            +{Object.values(products).flat().filter(p => p.vendorId === vendor.id).length - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                style={{ ...styles.button, ...styles.secondaryBtn, width: '100%', marginTop: '16px' }}
+                onClick={() => setShowVendorSettings(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // SETTLEMENT REPORT MODAL
+      // ============================================
+      const SettlementModal = () => {
+        const [dateRange, setDateRange] = useState('week');
+        
+        return (
+          <div style={styles.modal} onClick={() => setShowSettlement(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: '800px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h2 style={{ margin: 0, fontSize: '20px' }}>💰 Vendor Settlement Report</h2>
+                <select
+                  style={{ ...styles.input, width: '150px' }}
+                  value={dateRange}
+                  onChange={e => setDateRange(e.target.value)}
+                >
+                  <option value="today">Today</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                </select>
+              </div>
+
+              {/* Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                <div style={{ background: '#f0fdf4', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '700', color: '#0f6e56' }}>
+                    ${Object.values(calculateSettlement).reduce((sum, v) => sum + v.grossSales, 0).toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>Total Sales</div>
+                </div>
+                <div style={{ background: '#fef3c7', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '700', color: '#92400e' }}>
+                    ${Object.values(calculateSettlement).reduce((sum, v) => sum + v.commission, 0).toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>Commission Earned</div>
+                </div>
+                <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '700', color: '#1e40af' }}>
+                    ${Object.values(calculateSettlement).filter(v => v.vendor.type === 'consignment').reduce((sum, v) => sum + v.netPayable, 0).toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>Due to Vendors</div>
+                </div>
+              </div>
+
+              {/* Vendor Breakdown */}
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {Object.values(calculateSettlement)
+                  .filter(s => s.grossSales > 0)
+                  .sort((a, b) => b.grossSales - a.grossSales)
+                  .map(settlement => (
+                  <div
+                    key={settlement.vendor.id}
+                    style={{
+                      padding: '16px',
+                      borderRadius: '12px',
+                      border: `2px solid ${settlement.vendor.color}`,
+                      background: 'white',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{
+                          width: '10px',
+                          height: '10px',
+                          borderRadius: '50%',
+                          background: settlement.vendor.color,
+                        }} />
+                        <span style={{ fontWeight: '600' }}>{settlement.vendor.name}</span>
+                        <span style={{
+                          padding: '2px 6px',
+                          borderRadius: '8px',
+                          fontSize: '10px',
+                          background: '#f5f5f5',
+                        }}>
+                          {settlement.vendor.commissionRate}% rate
+                        </span>
+                      </div>
+                      {settlement.vendor.type === 'consignment' && (
+                        <button style={{ ...styles.button, ...styles.primaryBtn, padding: '6px 12px', fontSize: '11px' }}>
+                          Process Payment
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', fontSize: '13px' }}>
+                      <div>
+                        <div style={{ color: '#888', fontSize: '11px' }}>Gross Sales</div>
+                        <div style={{ fontWeight: '600' }}>${settlement.grossSales.toFixed(2)}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#888', fontSize: '11px' }}>Commission</div>
+                        <div style={{ fontWeight: '600', color: '#dc2626' }}>-${settlement.commission.toFixed(2)}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#888', fontSize: '11px' }}>Net Payable</div>
+                        <div style={{ fontWeight: '700', color: '#0f6e56' }}>${settlement.netPayable.toFixed(2)}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#888', fontSize: '11px' }}>Items Sold</div>
+                        <div style={{ fontWeight: '600' }}>{settlement.itemsSold.toFixed(1)}</div>
+                      </div>
+                    </div>
+
+                    {/* Transaction details */}
+                    {settlement.transactions.length > 0 && (
+                      <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #eee' }}>
+                        <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px' }}>Recent Transactions:</div>
+                        <div style={{ fontSize: '12px' }}>
+                          {settlement.transactions.slice(0, 3).map((t, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+                              <span>{t.date} - {t.item} ({t.quantity})</span>
+                              <span>${t.total.toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }}>
+                  📤 Export CSV
+                </button>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }}>
+                  🖨️ Print Report
+                </button>
+                <button
+                  style={{ ...styles.button, ...styles.primaryBtn, flex: 1 }}
+                  onClick={() => setShowSettlement(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // PAYMENT MODAL (WITH VENDOR BREAKDOWN)
+      // ============================================
+      const PaymentModal = () => {
+        const completeSale = () => {
+          // Add to sales history
+          const newSale = {
+            id: `s${Date.now()}`,
+            date: new Date().toISOString().split('T')[0],
+            items: cart.map(item => ({
+              productId: item.id,
+              name: item.name,
+              vendorId: item.vendorId,
+              quantity: item.quantity,
+              price: item.price,
+              total: item.total,
+              isWeight: item.isWeight,
+            })),
+            paymentMethod: 'card',
+            total: cartTotal,
+          };
+          setSales([...sales, newSale]);
+          setCart([]);
+          setShowPayment(false);
+        };
+
+        return (
+          <div style={styles.modal} onClick={() => setShowPayment(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 16px', fontSize: '20px' }}>💳 Complete Sale</h2>
+              
+              {/* Vendor breakdown */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Sales by Vendor:</div>
+                {Object.entries(cartByVendor).map(([vendorId, data]) => (
+                  <div key={vendorId} style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    marginBottom: '6px',
+                    background: '#f8f7f4',
+                    borderRadius: '8px',
+                    borderLeft: `4px solid ${data.vendor?.color || '#666'}`,
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: '500', fontSize: '13px' }}>{data.vendor?.name}</div>
+                      <div style={{ fontSize: '11px', color: '#888' }}>{data.items.length} items</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: '600' }}>${data.subtotal.toFixed(2)}</div>
+                      {data.vendor?.type === 'consignment' && (
+                        <div style={{ fontSize: '10px', color: '#888' }}>
+                          {data.vendor.commissionRate}% commission
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ fontSize: '32px', fontWeight: '700', color: '#0f6e56', textAlign: 'center', marginBottom: '20px', padding: '16px', background: '#f0fdf4', borderRadius: '12px' }}>
+                Total: ${cartTotal.toFixed(2)}
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
+                <button
+                  style={{ ...styles.button, ...styles.primaryBtn, padding: '16px', fontSize: '15px' }}
+                  onClick={completeSale}
+                >
+                  💳 Card Payment
+                </button>
+                <button
+                  style={{ ...styles.button, ...styles.secondaryBtn, padding: '16px', fontSize: '15px' }}
+                  onClick={completeSale}
+                >
+                  💵 Cash
+                </button>
+              </div>
+
+              <button
+                style={{ ...styles.button, ...styles.dangerBtn, width: '100%' }}
+                onClick={() => setShowPayment(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // OPERATOR VIEW
+      // ============================================
+      const renderOperatorView = () => (
+        <div style={isMobile ? { padding: '16px' } : styles.main}>
+          <div style={styles.card}>
+            {/* Toolbar */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              <input
+                style={{ ...styles.input, flex: '1', minWidth: '160px' }}
+                placeholder="🔍 Scan barcode..."
+                value={scannerInput}
+                onChange={e => setScannerInput(e.target.value)}
+                onKeyPress={e => {
+                  if (e.key === 'Enter') {
+                    const result = findProductByBarcode(scannerInput);
+                    if (result) {
+                      if (result.product.unitType === 'weight') {
+                        setScaleProduct(result.product);
+                        simulateWeigh();
+                      } else {
+                        addToCart(result.product, 1);
+                      }
+                    }
+                    setScannerInput('');
+                  }
+                }}
+              />
+              <select
+                style={{ ...styles.input, width: '140px' }}
+                value={vendorFilter}
+                onChange={e => setVendorFilter(e.target.value)}
+              >
+                <option value="all">All Vendors</option>
+                {Object.values(vendors).map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+              <button
+                style={{ ...styles.button, ...styles.primaryBtn }}
+                onClick={() => setShowAddProduct(true)}
+              >
+                ➕
+              </button>
+            </div>
+
+            {/* Categories */}
+            <div style={styles.categories}>
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat.id}
+                  style={{
+                    ...styles.categoryBtn,
+                    borderColor: cat.color,
+                    background: selectedCategory === cat.id ? cat.color : 'white',
+                    color: selectedCategory === cat.id ? 'white' : cat.color,
+                  }}
+                  onClick={() => setSelectedCategory(cat.id)}
+                >
+                  <span>{cat.icon}</span> {cat.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Products */}
+            <div style={styles.productGrid}>
+              {products[selectedCategory]
+                ?.filter(p => vendorFilter === 'all' || p.vendorId === vendorFilter)
+                .map(product => {
+                const vendor = vendors[product.vendorId];
+                return (
+                  <div
+                    key={product.id}
+                    style={{
+                      ...styles.productCard,
+                      borderColor: product.stock < 10 ? '#fecaca' : '#e8e5dc',
+                    }}
+                    onClick={() => {
+                      if (product.unitType === 'weight') {
+                        setScaleProduct(product);
+                        simulateWeigh();
+                      } else {
+                        addToCart(product, 1);
+                      }
+                    }}
+                  >
+                    {/* Vendor badge */}
+                    <div style={{ ...styles.vendorBadge, background: vendor?.color || '#666' }}>
+                      {vendor?.name?.split(' ')[0] || 'Unknown'}
+                    </div>
+                    
+                    <img src={product.image} alt={product.name} style={styles.productImage} />
+                    <div style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px', lineHeight: '1.2' }}>
+                      {product.name}
+                    </div>
+                    <div style={{ fontSize: '14px', fontWeight: '700', color: '#0f6e56' }}>
+                      ${product.price.toFixed(2)}
+                      <span style={{ fontSize: '10px', fontWeight: '400', color: '#666' }}>/{product.unit}</span>
+                    </div>
+                    <div style={{
+                      fontSize: '10px',
+                      color: product.stock < 10 ? '#dc2626' : '#666',
+                      marginTop: '4px',
+                    }}>
+                      {product.unitType === 'weight' ? '⚖️ ' : ''}Stock: {product.stock}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Sidebar */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Scale panel */}
+            {scaleProduct && (
+              <div style={{
+                background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+                border: '2px solid #d97706',
+                borderRadius: '14px',
+                padding: '16px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                  <img src={scaleProduct.image} alt="" style={{ width: '50px', height: '50px', borderRadius: '8px', objectFit: 'cover' }} />
+                  <div>
+                    <div style={{ fontWeight: '600', color: '#92400e' }}>{scaleProduct.name}</div>
+                    <div style={{ fontSize: '12px', color: '#b45309' }}>${scaleProduct.price.toFixed(2)}/lb</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: '36px', fontWeight: '700', textAlign: 'center', color: '#78350f', fontFamily: 'monospace' }}>
+                  {weight.toFixed(2)} lb
+                </div>
+                <div style={{ textAlign: 'center', fontSize: '12px', color: '#92400e', marginBottom: '12px' }}>
+                  {stable ? '✓ Stable' : '○ Measuring...'}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }} onClick={simulateWeigh}>
+                    Re-weigh
+                  </button>
+                  <button
+                    style={{ ...styles.button, ...styles.primaryBtn, flex: 1 }}
+                    onClick={() => {
+                      if (stable && weight > 0) {
+                        addToCart(scaleProduct, 1, weight);
+                        setScaleProduct(null);
+                        setWeight(0);
+                      }
+                    }}
+                    disabled={!stable || weight === 0}
+                  >
+                    Add ${(scaleProduct.price * weight).toFixed(2)}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cart */}
+            <div style={{ ...styles.card, flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontWeight: '600', fontSize: '15px' }}>🛒 Cart ({cart.length})</span>
+                <button
+                  style={{ ...styles.button, ...styles.secondaryBtn, padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => setCart([])}
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div style={{ maxHeight: '250px', overflowY: 'auto', marginBottom: '12px' }}>
+                {cart.length === 0 ? (
+                  <div style={{ textAlign: 'center', color: '#888', padding: '24px', fontSize: '13px' }}>
+                    No items in cart
+                  </div>
+                ) : (
+                  cart.map((item, index) => (
+                    <div key={index} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 0',
+                      borderBottom: '1px solid #eee',
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: '500', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: item.vendorColor,
+                          }} />
+                          {item.name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#888' }}>
+                          {item.isWeight
+                            ? `${item.quantity.toFixed(2)} lb × $${item.price.toFixed(2)}`
+                            : `${item.quantity} × $${item.price.toFixed(2)}`
+                          }
+                          <span style={{ marginLeft: '6px', color: '#aaa' }}>• {item.vendorName}</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontWeight: '600', color: '#0f6e56', fontSize: '13px' }}>${item.total.toFixed(2)}</span>
+                        <button
+                          style={{
+                            width: '20px',
+                            height: '20px',
+                            borderRadius: '4px',
+                            border: 'none',
+                            background: '#fef2f2',
+                            color: '#dc2626',
+                            cursor: 'pointer',
+                            fontSize: '10px',
+                          }}
+                          onClick={() => setCart(cart.filter((_, i) => i !== index))}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Vendor summary in cart */}
+              {cart.length > 0 && (
+                <div style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #eee' }}>
+                  <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px' }}>By vendor:</div>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {Object.entries(cartByVendor).map(([vendorId, data]) => (
+                      <span key={vendorId} style={{
+                        padding: '3px 8px',
+                        borderRadius: '10px',
+                        fontSize: '10px',
+                        fontWeight: '600',
+                        background: data.vendor?.color + '20',
+                        color: data.vendor?.color,
+                      }}>
+                        {data.vendor?.name?.split(' ')[0]}: ${data.subtotal.toFixed(2)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                padding: '12px 0',
+                borderTop: '2px solid #0f6e56',
+                fontSize: '18px',
+                fontWeight: '700',
+              }}>
+                <span>Total</span>
+                <span style={{ color: '#0f6e56' }}>${cartTotal.toFixed(2)}</span>
+              </div>
+
+              <button
+                style={{
+                  ...styles.button,
+                  ...styles.primaryBtn,
+                  width: '100%',
+                  padding: '14px',
+                  fontSize: '15px',
+                  opacity: cart.length === 0 ? 0.5 : 1,
+                }}
+                disabled={cart.length === 0}
+                onClick={() => setShowPayment(true)}
+              >
+                💳 Pay Now
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // CUSTOMER VIEW (UNCHANGED UI)
+      // ============================================
+      const renderCustomerView = () => {
+        const labels = {
+          en: { welcome: 'Welcome to Valley View Farm Cooperative', scan: 'Tap items to add • Supporting local farms', basket: 'Your Basket', pay: 'Pay Now', clear: 'Clear' },
+          es: { welcome: 'Bienvenido a la Cooperativa Valley View', scan: 'Toque los artículos • Apoyando granjas locales', basket: 'Tu Canasta', pay: 'Pagar', clear: 'Borrar' }
+        };
+        const t = labels[language];
+
+        return (
+          <div style={{ ...styles.app, paddingBottom: '160px' }}>
+            <button
+              style={{
+                position: 'fixed',
+                top: '16px',
+                right: '16px',
+                background: 'white',
+                padding: '10px 14px',
+                borderRadius: '20px',
+                border: '1px solid #ddd',
+                fontSize: '13px',
+                cursor: 'pointer',
+                zIndex: 100,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                fontFamily: 'inherit',
+              }}
+              onClick={() => setLanguage(language === 'en' ? 'es' : 'en')}
+            >
+              {language === 'en' ? '🇺🇸 EN' : '🇲🇽 ES'}
+            </button>
+
+            <div style={{ maxWidth: '700px', margin: '0 auto', padding: '20px' }}>
+              <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                <div style={{ fontSize: '26px', fontWeight: '700', color: '#0f6e56', marginBottom: '8px' }}>
+                  🌱 {t.welcome}
+                </div>
+                <div style={{ color: '#666', fontSize: '14px' }}>{t.scan}</div>
+              </div>
+
+              <div style={{ ...styles.categories, justifyContent: 'center' }}>
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat.id}
+                    style={{
+                      ...styles.categoryBtn,
+                      borderColor: cat.color,
+                      background: selectedCategory === cat.id ? cat.color : 'white',
+                      color: selectedCategory === cat.id ? 'white' : cat.color,
+                    }}
+                    onClick={() => setSelectedCategory(cat.id)}
+                  >
+                    <span style={{ fontSize: '16px' }}>{cat.icon}</span> {cat.name}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                gap: '14px',
+              }}>
+                {products[selectedCategory]?.map(product => {
+                  const vendor = vendors[product.vendorId];
+                  return (
+                    <div
+                      key={product.id}
+                      style={{
+                        background: 'white',
+                        borderRadius: '16px',
+                        padding: '14px',
+                        textAlign: 'center',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                        cursor: 'pointer',
+                        position: 'relative',
+                      }}
+                      onClick={() => {
+                        if (product.unitType === 'weight') {
+                          setScaleProduct(product);
+                          simulateWeigh();
+                        } else {
+                          addToCart(product, 1);
+                        }
+                      }}
+                    >
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        style={{ width: '100%', height: '100px', objectFit: 'cover', borderRadius: '10px', marginBottom: '10px' }}
+                      />
+                      <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '4px' }}>{product.name}</div>
+                      <div style={{ fontSize: '16px', fontWeight: '700', color: '#0f6e56' }}>
+                        ${product.price.toFixed(2)}
+                        <span style={{ fontSize: '11px', fontWeight: '400', color: '#666' }}>/{product.unit}</span>
+                      </div>
+                      {/* Small vendor indicator */}
+                      <div style={{ fontSize: '10px', color: vendor?.color, marginTop: '4px' }}>
+                        {vendor?.name}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Fixed bottom cart */}
+            <div style={{
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              background: 'white',
+              padding: '16px 20px',
+              boxShadow: '0 -4px 20px rgba(0,0,0,0.12)',
+              borderRadius: '24px 24px 0 0',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>{t.basket} ({cart.length} items)</div>
+                  <div style={{ fontSize: '24px', fontWeight: '700', color: '#0f6e56' }}>${cartTotal.toFixed(2)}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    style={{ ...styles.button, ...styles.secondaryBtn }}
+                    onClick={() => setCart([])}
+                  >
+                    {t.clear}
+                  </button>
+                  <button
+                    style={{ ...styles.button, ...styles.primaryBtn, padding: '12px 24px' }}
+                    disabled={cart.length === 0}
+                    onClick={() => setShowPayment(true)}
+                  >
+                    {t.pay} →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // VENDORS VIEW
+      // ============================================
+      const renderVendorsView = () => (
+        <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+            <h2 style={{ margin: 0, fontSize: '20px' }}>🏪 Vendors & Consignment</h2>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                style={{ ...styles.button, ...styles.primaryBtn }}
+                onClick={() => setShowSettlement(true)}
+              >
+                💰 Settlement Report
+              </button>
+            </div>
+          </div>
+
+          {/* Vendor Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+            {Object.values(vendors).map(vendor => {
+              const vendorProducts = Object.values(products).flat().filter(p => p.vendorId === vendor.id);
+              const settlement = calculateSettlement[vendor.id];
+              
+              return (
+                <div
+                  key={vendor.id}
+                  style={{
+                    ...styles.card,
+                    borderTop: `4px solid ${vendor.color}`,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div>
+                      <div style={{ fontWeight: '600', fontSize: '16px', marginBottom: '4px' }}>{vendor.name}</div>
+                      <span style={{
+                        padding: '3px 10px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        background: vendor.type === 'owner' ? '#dcfce7' : '#fef3c7',
+                        color: vendor.type === 'owner' ? '#166534' : '#92400e',
+                      }}>
+                        {vendor.type === 'owner' ? '🏠 Farm Store' : '📦 Consignment'}
+                      </span>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: vendor.color }}>
+                        {vendor.commissionRate}%
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#888' }}>Commission</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                    <div style={{ background: '#f8f7f4', padding: '12px', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '18px', fontWeight: '700', color: '#0f6e56' }}>{vendorProducts.length}</div>
+                      <div style={{ fontSize: '11px', color: '#666' }}>Products</div>
+                    </div>
+                    <div style={{ background: '#f8f7f4', padding: '12px', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '18px', fontWeight: '700', color: '#185FA5' }}>
+                        ${settlement?.grossSales.toFixed(2) || '0.00'}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#666' }}>Period Sales</div>
+                    </div>
+                  </div>
+
+                  {vendor.type === 'consignment' && (
+                    <div style={{ borderTop: '1px solid #eee', paddingTop: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
+                        <span style={{ color: '#666' }}>Net Payable:</span>
+                        <span style={{ fontWeight: '600', color: '#0f6e56' }}>${settlement?.netPayable.toFixed(2) || '0.00'}</span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#888' }}>
+                        Payment: {vendor.paymentMethod.toUpperCase()} • {vendor.paymentTerms}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                    <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1, fontSize: '11px' }}>
+                      View Products
+                    </button>
+                    {vendor.type === 'consignment' && (
+                      <button style={{ ...styles.button, ...styles.primaryBtn, flex: 1, fontSize: '11px' }}>
+                        Process Payment
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Quick Stats */}
+          <div style={{ ...styles.card, marginTop: '20px' }}>
+            <h3 style={{ margin: '0 0 16px', fontSize: '16px' }}>📊 Cooperative Summary</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+              <div style={{ background: '#f0fdf4', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '28px', fontWeight: '700', color: '#0f6e56' }}>
+                  {Object.values(vendors).length}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Total Vendors</div>
+              </div>
+              <div style={{ background: '#fef3c7', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '28px', fontWeight: '700', color: '#92400e' }}>
+                  {Object.values(vendors).filter(v => v.type === 'consignment').length}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Consignment Partners</div>
+              </div>
+              <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '28px', fontWeight: '700', color: '#1e40af' }}>
+                  {Object.values(products).flat().length}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Total Products</div>
+              </div>
+              <div style={{ background: '#fdf2f8', padding: '16px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '28px', fontWeight: '700', color: '#9d174d' }}>
+                  ${Object.values(calculateSettlement).filter(v => v.vendor.type === 'consignment').reduce((sum, v) => sum + v.netPayable, 0).toFixed(2)}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Due to Vendors</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // INVENTORY VIEW
+      // ============================================
+      const renderInventoryView = () => {
+        const allProducts = Object.entries(products).flatMap(([category, prods]) =>
+          prods.map(p => ({ ...p, category }))
+        );
+
+        return (
+          <div style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+              <h2 style={{ margin: 0, fontSize: '20px' }}>📦 Inventory</h2>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <select
+                  style={{ ...styles.input, width: '160px' }}
+                  value={vendorFilter}
+                  onChange={e => setVendorFilter(e.target.value)}
+                >
+                  <option value="all">All Vendors</option>
+                  {Object.values(vendors).map(v => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+                <button
+                  style={{ ...styles.button, ...styles.primaryBtn }}
+                  onClick={() => setShowAddProduct(true)}
+                >
+                  ➕ Add Product
+                </button>
+              </div>
+            </div>
+
+            <div style={{ ...styles.card, overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '800px' }}>
+                <thead>
+                  <tr style={{ background: '#0f6e56', color: 'white' }}>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Product</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Vendor</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Category</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Price</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Stock</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px' }}>Commission</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allProducts
+                    .filter(p => vendorFilter === 'all' || p.vendorId === vendorFilter)
+                    .map(product => {
+                    const vendor = vendors[product.vendorId];
+                    return (
+                      <tr key={product.id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <img src={product.image} alt="" style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'cover' }} />
+                            <span style={{ fontWeight: '500', fontSize: '13px' }}>{product.name}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px' }}>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 10px',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            background: vendor?.color + '20',
+                            color: vendor?.color,
+                          }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: vendor?.color }} />
+                            {vendor?.name}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px', fontSize: '12px' }}>{product.category}</td>
+                        <td style={{ padding: '10px', fontWeight: '600', fontSize: '13px' }}>${product.price.toFixed(2)}/{product.unit}</td>
+                        <td style={{ padding: '10px', fontWeight: '600', color: product.stock < 15 ? '#dc2626' : '#0f6e56' }}>
+                          {product.stock}
+                        </td>
+                        <td style={{ padding: '10px', fontSize: '12px' }}>
+                          {vendor?.commissionRate}%
+                          <span style={{ color: '#888', marginLeft: '6px' }}>
+                            (${(product.price * vendor?.commissionRate / 100).toFixed(2)}/unit)
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // MAIN RENDER
+      // ============================================
+      return (
+        <div style={styles.app}>
+          <header style={styles.header}>
+            <div style={styles.logo}>
+              <span style={{ fontSize: '24px' }}>🌱</span>
+              <div>
+                <div>Valley View Farm</div>
+                <div style={{ fontSize: '10px', opacity: 0.8, fontWeight: '400' }}>Cooperative POS</div>
+              </div>
+            </div>
+            <div style={styles.tabs}>
+              {[
+                { id: 'operator', label: '👤 POS' },
+                { id: 'customer', label: '🖥️ Kiosk' },
+                { id: 'vendors', label: '🤝 Vendors' },
+                { id: 'inventory', label: '📦 Inventory' },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  style={{ ...styles.tab, ...(view === tab.id ? styles.tabActive : styles.tabInactive) }}
+                  onClick={() => setView(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: '11px', opacity: 0.8 }}>
+              {new Date().toLocaleDateString()}
+            </div>
+          </header>
+
+          {view === 'operator' && renderOperatorView()}
+          {view === 'customer' && renderCustomerView()}
+          {view === 'vendors' && renderVendorsView()}
+          {view === 'inventory' && renderInventoryView()}
+
+          {showAddProduct && <AddProductModal />}
+          {showPayment && <PaymentModal />}
+          {showVendorSettings && <VendorSettingsModal />}
+          {showSettlement && <SettlementModal />}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<FarmStorePOS />);
+  </script>
+</body>
+</html>
