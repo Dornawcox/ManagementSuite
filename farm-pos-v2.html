@@ -1,0 +1,1768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valley View Farm Cooperative POS</title>
+  <meta name="description" content="Cooperative Farm Store POS with multi-vendor consignment, role-based access, and peripheral device management">
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(145deg, #f8f7f4 0%, #e8e5dc 100%);
+      min-height: 100vh;
+      color: #2c2c2a;
+    }
+    #root { min-height: 100vh; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+    .loading {
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; font-size: 18px; color: #666;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+  </style>
+</head>
+<body>
+  <div id="root"><div class="loading">Loading Cooperative POS...</div></div>
+  
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
+
+    // ============================================
+    // API SIMULATION LAYER (Production: Replace with fetch calls)
+    // ============================================
+    const API = {
+      // Base URL for production
+      baseUrl: '/api/v1',
+      
+      // Simulated delay for realistic UX
+      delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+      
+      // Auth endpoints
+      auth: {
+        login: async (username, pin) => {
+          await API.delay(300);
+          const user = USERS.find(u => u.username === username && u.pin === pin);
+          if (user) {
+            return { success: true, user: { ...user, pin: undefined }, token: `token_${Date.now()}` };
+          }
+          return { success: false, error: 'Invalid credentials' };
+        },
+        logout: async () => {
+          await API.delay(100);
+          return { success: true };
+        },
+        validateToken: async (token) => {
+          await API.delay(100);
+          return { valid: token?.startsWith('token_') };
+        }
+      },
+      
+      // Vendor endpoints
+      vendors: {
+        list: async () => ({ data: Object.values(VENDORS) }),
+        get: async (id) => ({ data: VENDORS[id] }),
+        create: async (vendor) => {
+          const id = `vendor_${Date.now()}`;
+          VENDORS[id] = { ...vendor, id };
+          return { data: VENDORS[id] };
+        },
+        update: async (id, updates) => {
+          VENDORS[id] = { ...VENDORS[id], ...updates };
+          return { data: VENDORS[id] };
+        },
+        delete: async (id) => {
+          delete VENDORS[id];
+          return { success: true };
+        }
+      },
+      
+      // Product endpoints
+      products: {
+        list: async (filters) => {
+          let products = Object.values(PRODUCTS).flat();
+          if (filters?.vendorId) {
+            products = products.filter(p => p.vendorId === filters.vendorId);
+          }
+          if (filters?.category) {
+            products = products.filter(p => p.category === filters.category);
+          }
+          return { data: products };
+        },
+        get: async (id) => {
+          const product = Object.values(PRODUCTS).flat().find(p => p.id === id);
+          return { data: product };
+        },
+        create: async (product) => {
+          const id = `${product.category[0]}${Date.now()}`;
+          const newProduct = { ...product, id };
+          if (!PRODUCTS[product.category]) PRODUCTS[product.category] = [];
+          PRODUCTS[product.category].push(newProduct);
+          return { data: newProduct };
+        },
+        update: async (id, updates) => {
+          for (const cat of Object.keys(PRODUCTS)) {
+            const idx = PRODUCTS[cat].findIndex(p => p.id === id);
+            if (idx >= 0) {
+              PRODUCTS[cat][idx] = { ...PRODUCTS[cat][idx], ...updates };
+              return { data: PRODUCTS[cat][idx] };
+            }
+          }
+          return { error: 'Product not found' };
+        },
+        delete: async (id) => {
+          for (const cat of Object.keys(PRODUCTS)) {
+            const idx = PRODUCTS[cat].findIndex(p => p.id === id);
+            if (idx >= 0) {
+              PRODUCTS[cat].splice(idx, 1);
+              return { success: true };
+            }
+          }
+          return { error: 'Product not found' };
+        },
+        updateStock: async (id, quantity, action) => {
+          for (const cat of Object.keys(PRODUCTS)) {
+            const idx = PRODUCTS[cat].findIndex(p => p.id === id);
+            if (idx >= 0) {
+              PRODUCTS[cat][idx].stock = action === 'add' 
+                ? PRODUCTS[cat][idx].stock + quantity 
+                : PRODUCTS[cat][idx].stock - quantity;
+              return { data: PRODUCTS[cat][idx] };
+            }
+          }
+          return { error: 'Product not found' };
+        }
+      },
+      
+      // Transaction endpoints
+      transactions: {
+        create: async (transaction) => {
+          const id = `txn_${Date.now()}`;
+          const newTxn = { ...transaction, id, createdAt: new Date().toISOString() };
+          TRANSACTIONS.push(newTxn);
+          return { data: newTxn };
+        },
+        list: async (filters) => {
+          let txns = [...TRANSACTIONS];
+          if (filters?.startDate) {
+            txns = txns.filter(t => t.createdAt >= filters.startDate);
+          }
+          if (filters?.endDate) {
+            txns = txns.filter(t => t.createdAt <= filters.endDate);
+          }
+          return { data: txns };
+        }
+      },
+      
+      // Device endpoints
+      devices: {
+        list: async () => ({ data: DEVICES }),
+        update: async (id, config) => {
+          const idx = DEVICES.findIndex(d => d.id === id);
+          if (idx >= 0) {
+            DEVICES[idx] = { ...DEVICES[idx], ...config };
+            return { data: DEVICES[idx] };
+          }
+          return { error: 'Device not found' };
+        },
+        test: async (id) => {
+          await API.delay(500);
+          return { success: true, message: 'Device responded successfully' };
+        }
+      },
+      
+      // Settings endpoints
+      settings: {
+        get: async () => ({ data: SETTINGS }),
+        update: async (updates) => {
+          Object.assign(SETTINGS, updates);
+          return { data: SETTINGS };
+        }
+      }
+    };
+
+    // ============================================
+    // DATA STORES (Production: PostgreSQL/Odoo)
+    // ============================================
+    
+    // Users with roles
+    const USERS = [
+      { id: 'u1', username: 'admin', pin: '1234', name: 'Admin User', role: 'admin', permissions: ['all'] },
+      { id: 'u2', username: 'manager', pin: '5678', name: 'Farm Manager', role: 'manager', permissions: ['pos', 'inventory', 'vendors', 'reports', 'settings'] },
+      { id: 'u3', username: 'cashier', pin: '0000', name: 'Cashier', role: 'cashier', permissions: ['pos'] },
+      { id: 'u4', username: 'kiosk', pin: '9999', name: 'Self-Service', role: 'kiosk', permissions: ['kiosk'] },
+    ];
+
+    // Vendors
+    let VENDORS = {
+      'farm-store': { id: 'farm-store', name: 'Valley View Farm', type: 'owner', commissionRate: 0, contact: 'admin@valleyviewfarm.com', paymentMethod: 'internal', paymentTerms: 'internal', color: '#0f6e56', active: true, address: '123 Farm Road', phone: '555-0100' },
+      'sunny-acres': { id: 'sunny-acres', name: 'Sunny Acres Farm', type: 'consignment', commissionRate: 15, contact: 'jen@sunnyacres.farm', paymentMethod: 'check', paymentTerms: 'net-15', color: '#D85A30', active: true, address: '456 Sunny Lane', phone: '555-0101' },
+      'hilltop-dairy': { id: 'hilltop-dairy', name: 'Hilltop Dairy', type: 'consignment', commissionRate: 12, contact: 'mike@hilltopdairy.com', paymentMethod: 'ach', paymentTerms: 'net-30', color: '#185FA5', active: true, address: '789 Hilltop Dr', phone: '555-0102' },
+      'beekeepers-coop': { id: 'beekeepers-coop', name: "Beekeepers' Cooperative", type: 'consignment', commissionRate: 10, contact: 'hive@beekeeperscoop.org', paymentMethod: 'check', paymentTerms: 'net-15', color: '#BA7517', active: true, address: '321 Honey Way', phone: '555-0103' },
+      'heritage-meats': { id: 'heritage-meats', name: 'Heritage Meats', type: 'consignment', commissionRate: 18, contact: 'orders@heritagemeats.farm', paymentMethod: 'ach', paymentTerms: 'net-7', color: '#993556', active: true, address: '654 Pasture Rd', phone: '555-0104' },
+    };
+
+    // Products by category
+    let PRODUCTS = {
+      vegetables: [
+        { id: 'v1', name: 'Heirloom Tomatoes', price: 4.50, unit: 'lb', unitType: 'weight', stock: 45, image: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=300&h=300&fit=crop', barcode: '0001001', vendorId: 'farm-store', origin: 'Field A', harvestDate: '2026-03-14', category: 'vegetables', minStock: 10, sku: 'VEG-TOM-001' },
+        { id: 'v2', name: 'Mixed Salad Greens', price: 6.00, unit: 'bag', unitType: 'each', stock: 28, image: 'https://images.unsplash.com/photo-1556801712-76c8eb07bbc9?w=300&h=300&fit=crop', barcode: '0001002', vendorId: 'farm-store', origin: 'Greenhouse 1', harvestDate: '2026-03-15', category: 'vegetables', minStock: 10, sku: 'VEG-SAL-001' },
+        { id: 'v3', name: 'Rainbow Carrots', price: 3.50, unit: 'bunch', unitType: 'bunch', stock: 35, image: 'https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=300&h=300&fit=crop', barcode: '0001003', vendorId: 'sunny-acres', origin: 'Sunny Acres', harvestDate: '2026-03-13', category: 'vegetables', minStock: 15, sku: 'VEG-CAR-001' },
+        { id: 'v4', name: 'Garlic (Hardneck)', price: 1.50, unit: 'head', unitType: 'each', stock: 60, image: 'https://images.unsplash.com/photo-1540148426945-6cf22a6b2383?w=300&h=300&fit=crop', barcode: '0001004', vendorId: 'sunny-acres', origin: 'Sunny Acres', harvestDate: '2026-02-28', category: 'vegetables', minStock: 20, sku: 'VEG-GAR-001' },
+        { id: 'v5', name: 'Summer Squash', price: 2.75, unit: 'lb', unitType: 'weight', stock: 30, image: 'https://images.unsplash.com/photo-1563252722-6434563a985d?w=300&h=300&fit=crop', barcode: '0001005', vendorId: 'farm-store', origin: 'Field A', harvestDate: '2026-03-14', category: 'vegetables', minStock: 10, sku: 'VEG-SQU-001' },
+        { id: 'v6', name: 'Sweet Bell Peppers', price: 5.00, unit: 'lb', unitType: 'weight', stock: 22, image: 'https://images.unsplash.com/photo-1563565375-f3fdfdbefa83?w=300&h=300&fit=crop', barcode: '0001006', vendorId: 'sunny-acres', origin: 'Sunny Acres', harvestDate: '2026-03-15', category: 'vegetables', minStock: 10, sku: 'VEG-PEP-001' },
+      ],
+      fruit: [
+        { id: 'f1', name: 'Honeycrisp Apples', price: 3.75, unit: 'lb', unitType: 'weight', stock: 80, image: 'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=300&h=300&fit=crop', barcode: '0002001', vendorId: 'sunny-acres', origin: 'Sunny Acres', harvestDate: '2026-03-01', category: 'fruit', minStock: 20, sku: 'FRT-APL-001' },
+        { id: 'f2', name: 'Freestone Peaches', price: 4.25, unit: 'lb', unitType: 'weight', stock: 40, image: 'https://images.unsplash.com/photo-1595124224150-0c9ae26316fc?w=300&h=300&fit=crop', barcode: '0002002', vendorId: 'farm-store', origin: 'Orchard South', harvestDate: '2026-03-12', category: 'fruit', minStock: 15, sku: 'FRT-PCH-001' },
+        { id: 'f3', name: 'Fresh Blueberries', price: 5.50, unit: 'pint', unitType: 'pint', stock: 25, image: 'https://images.unsplash.com/photo-1498557850523-fd3d118b962e?w=300&h=300&fit=crop', barcode: '0002003', vendorId: 'farm-store', origin: 'Berry Patch', harvestDate: '2026-03-14', category: 'fruit', minStock: 10, sku: 'FRT-BLU-001' },
+      ],
+      eggs: [
+        { id: 'e1', name: 'Farm Fresh Eggs', price: 6.00, unit: 'dozen', unitType: 'dozen', stock: 45, image: 'https://images.unsplash.com/photo-1582722872445-44dc5f7e3c8f?w=300&h=300&fit=crop', barcode: '0003001', vendorId: 'farm-store', origin: 'Chicken Coop A', harvestDate: '2026-03-15', category: 'eggs', minStock: 20, sku: 'EGG-CHK-001' },
+        { id: 'e2', name: 'Duck Eggs', price: 8.00, unit: 'half-dozen', unitType: 'half-dozen', stock: 12, image: 'https://images.unsplash.com/photo-1569127959161-2b1297b2d9a6?w=300&h=300&fit=crop', barcode: '0003002', vendorId: 'sunny-acres', origin: 'Sunny Acres', harvestDate: '2026-03-14', category: 'eggs', minStock: 5, sku: 'EGG-DUK-001' },
+      ],
+      dairy: [
+        { id: 'd1', name: 'Raw Milk', price: 12.00, unit: 'gallon', unitType: 'gallon', stock: 15, image: 'https://images.unsplash.com/photo-1563636619-e9143da7973b?w=300&h=300&fit=crop', barcode: '0004001', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy', harvestDate: '2026-03-15', category: 'dairy', minStock: 5, sku: 'DRY-MLK-001' },
+        { id: 'd2', name: 'Aged Goat Cheese', price: 9.50, unit: '8oz', unitType: 'each', stock: 20, image: 'https://images.unsplash.com/photo-1559561853-08451507cbe7?w=300&h=300&fit=crop', barcode: '0004002', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy', harvestDate: '2026-03-01', category: 'dairy', minStock: 8, sku: 'DRY-CHS-001' },
+        { id: 'd3', name: 'Cultured Butter', price: 8.00, unit: 'lb', unitType: 'each', stock: 25, image: 'https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=300&h=300&fit=crop', barcode: '0004003', vendorId: 'hilltop-dairy', origin: 'Hilltop Dairy', harvestDate: '2026-03-10', category: 'dairy', minStock: 10, sku: 'DRY-BTR-001' },
+      ],
+      meat: [
+        { id: 'm1', name: 'Ground Beef (80/20)', price: 8.50, unit: 'lb', unitType: 'weight', stock: 30, image: 'https://images.unsplash.com/photo-1602470520998-f4a52199a3d6?w=300&h=300&fit=crop', barcode: '0005001', vendorId: 'heritage-meats', origin: 'Heritage Meats', harvestDate: '2026-03-05', category: 'meat', minStock: 10, sku: 'MET-BEF-001' },
+        { id: 'm2', name: 'Whole Chicken', price: 5.75, unit: 'lb', unitType: 'weight', stock: 18, image: 'https://images.unsplash.com/photo-1604503468506-a8da13d82791?w=300&h=300&fit=crop', barcode: '0005002', vendorId: 'farm-store', origin: 'Pasture 2', harvestDate: '2026-03-10', category: 'meat', minStock: 8, sku: 'MET-CHK-001' },
+        { id: 'm3', name: 'Pork Chops', price: 9.00, unit: 'lb', unitType: 'weight', stock: 22, image: 'https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=300&h=300&fit=crop', barcode: '0005003', vendorId: 'heritage-meats', origin: 'Heritage Meats', harvestDate: '2026-03-08', category: 'meat', minStock: 8, sku: 'MET-PRK-001' },
+      ],
+      preserves: [
+        { id: 'p1', name: 'Strawberry Jam', price: 7.50, unit: 'jar', unitType: 'each', stock: 35, image: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=300&h=300&fit=crop', barcode: '0006001', vendorId: 'farm-store', origin: 'Farm Kitchen', harvestDate: '2026-02-15', category: 'preserves', minStock: 15, sku: 'PRE-JAM-001' },
+        { id: 'p2', name: 'Wildflower Honey', price: 12.00, unit: 'lb', unitType: 'each', stock: 20, image: 'https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=300&h=300&fit=crop', barcode: '0006003', vendorId: 'beekeepers-coop', origin: "Beekeepers' Coop", harvestDate: '2026-01-30', category: 'preserves', minStock: 10, sku: 'PRE-HNY-001' },
+        { id: 'p3', name: 'Raw Honeycomb', price: 15.00, unit: 'piece', unitType: 'each', stock: 8, image: 'https://images.unsplash.com/photo-1558642452-9d2a7deb7f62?w=300&h=300&fit=crop', barcode: '0006006', vendorId: 'beekeepers-coop', origin: "Beekeepers' Coop", harvestDate: '2026-02-15', category: 'preserves', minStock: 5, sku: 'PRE-HCB-001' },
+      ],
+    };
+
+    // Transactions
+    let TRANSACTIONS = [];
+
+    // Peripheral Devices
+    let DEVICES = [
+      { id: 'dev1', type: 'scanner', name: 'Barcode Scanner', model: 'Zebra DS2208', connection: 'usb', port: '/dev/ttyUSB0', status: 'connected', enabled: true, config: { mode: 'hid', beep: true } },
+      { id: 'dev2', type: 'printer', name: 'Receipt Printer', model: 'Epson TM-T20III', connection: 'usb', port: '/dev/usb/lp0', status: 'connected', enabled: true, config: { paperWidth: 80, autoCut: true } },
+      { id: 'dev3', type: 'scale', name: 'Produce Scale', model: 'Adam AZExtra 6', connection: 'usb', port: '/dev/ttyUSB1', status: 'connected', enabled: true, config: { unit: 'lb', tare: true, precision: 2 } },
+      { id: 'dev4', type: 'cashDrawer', name: 'Cash Drawer', model: 'APG Vasario', connection: 'printer', port: 'rj12', status: 'connected', enabled: true, config: { openCommand: 'ESC p 0' } },
+      { id: 'dev5', type: 'cardReader', name: 'Card Terminal', model: 'Stripe Reader M2', connection: 'bluetooth', port: 'bt:xx:xx:xx', status: 'connected', enabled: true, config: { provider: 'stripe' } },
+      { id: 'dev6', type: 'labelPrinter', name: 'Label Printer', model: 'Zebra ZD411', connection: 'usb', port: '/dev/usb/lp1', status: 'disconnected', enabled: false, config: { labelWidth: 2, labelHeight: 1 } },
+      { id: 'dev7', type: 'customerDisplay', name: 'Customer Display', model: 'HDMI Monitor', connection: 'hdmi', port: 'HDMI-2', status: 'connected', enabled: true, config: { resolution: '1920x1080' } },
+    ];
+
+    // System Settings
+    let SETTINGS = {
+      storeName: 'Valley View Farm Cooperative',
+      storeAddress: '123 Farm Road, Rural Valley, State 12345',
+      storePhone: '555-FARM',
+      taxRate: 0,
+      currency: 'USD',
+      language: 'en',
+      timezone: 'America/New_York',
+      receiptHeader: 'Thank you for supporting local farms!',
+      receiptFooter: 'Visit us at valleyviewfarm.com',
+      kioskEnabled: true,
+      kioskTimeout: 120,
+      scaleRequired: false,
+      farmosEnabled: false,
+      farmosUrl: '',
+      farmosApiKey: '',
+    };
+
+    const CATEGORIES = [
+      { id: 'vegetables', name: 'Vegetables', icon: '🥬', color: '#0F6E56' },
+      { id: 'fruit', name: 'Fruit', icon: '🍎', color: '#D85A30' },
+      { id: 'eggs', name: 'Eggs', icon: '🥚', color: '#BA7517' },
+      { id: 'dairy', name: 'Dairy', icon: '🧀', color: '#185FA5' },
+      { id: 'meat', name: 'Meat', icon: '🥩', color: '#993556' },
+      { id: 'preserves', name: 'Preserves', icon: '🍯', color: '#534AB7' },
+    ];
+
+    const UNIT_TYPES = [
+      { id: 'weight', name: 'By Weight', units: ['lb', 'oz', 'kg', 'g'], requiresScale: true },
+      { id: 'each', name: 'Each/Unit', units: ['each', 'head', 'jar', 'bottle', '8oz', '16oz', 'piece'], requiresScale: false },
+      { id: 'bunch', name: 'Bunch', units: ['bunch', 'bundle'], requiresScale: false },
+      { id: 'dozen', name: 'Dozen', units: ['dozen', 'half-dozen'], requiresScale: false },
+      { id: 'pint', name: 'Pint', units: ['pint', 'half-pint'], requiresScale: false },
+      { id: 'quart', name: 'Quart', units: ['quart'], requiresScale: false },
+      { id: 'gallon', name: 'Gallon', units: ['gallon', 'half-gallon'], requiresScale: false },
+      { id: 'bag', name: 'Bag', units: ['bag'], requiresScale: false },
+    ];
+
+    // ============================================
+    // AUTH CONTEXT
+    // ============================================
+    const AuthContext = createContext(null);
+
+    const useAuth = () => useContext(AuthContext);
+
+    const AuthProvider = ({ children }) => {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        // Check for saved session
+        const savedUser = localStorage.getItem('pos_user');
+        if (savedUser) {
+          setUser(JSON.parse(savedUser));
+        }
+        setLoading(false);
+      }, []);
+
+      const login = async (username, pin) => {
+        const result = await API.auth.login(username, pin);
+        if (result.success) {
+          setUser(result.user);
+          localStorage.setItem('pos_user', JSON.stringify(result.user));
+          localStorage.setItem('pos_token', result.token);
+        }
+        return result;
+      };
+
+      const logout = async () => {
+        await API.auth.logout();
+        setUser(null);
+        localStorage.removeItem('pos_user');
+        localStorage.removeItem('pos_token');
+      };
+
+      const hasPermission = (permission) => {
+        if (!user) return false;
+        if (user.permissions.includes('all')) return true;
+        return user.permissions.includes(permission);
+      };
+
+      return (
+        <AuthContext.Provider value={{ user, login, logout, hasPermission, loading }}>
+          {children}
+        </AuthContext.Provider>
+      );
+    };
+
+    // ============================================
+    // STYLES
+    // ============================================
+    const styles = {
+      app: {
+        fontFamily: '"Source Sans 3", -apple-system, BlinkMacSystemFont, sans-serif',
+        background: 'linear-gradient(145deg, #f8f7f4 0%, #e8e5dc 100%)',
+        minHeight: '100vh',
+        color: '#2c2c2a',
+      },
+      header: {
+        background: 'linear-gradient(90deg, #1a4d3e 0%, #0f6e56 50%, #1a8a6d 100%)',
+        color: 'white',
+        padding: '10px 20px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        flexWrap: 'wrap',
+        gap: '10px',
+      },
+      logo: { fontSize: '16px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' },
+      tabs: { display: 'flex', gap: '4px', flexWrap: 'wrap' },
+      tab: {
+        padding: '6px 12px',
+        borderRadius: '6px',
+        border: 'none',
+        cursor: 'pointer',
+        fontSize: '11px',
+        fontWeight: '600',
+        transition: 'all 0.2s',
+        fontFamily: 'inherit',
+      },
+      tabActive: { background: 'white', color: '#0f6e56' },
+      tabInactive: { background: 'rgba(255,255,255,0.15)', color: 'white' },
+      card: {
+        background: 'white',
+        borderRadius: '12px',
+        padding: '16px',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+      },
+      input: {
+        width: '100%',
+        padding: '10px 12px',
+        border: '2px solid #e0ddd5',
+        borderRadius: '8px',
+        fontSize: '13px',
+        boxSizing: 'border-box',
+        fontFamily: 'inherit',
+      },
+      button: {
+        padding: '10px 16px',
+        borderRadius: '8px',
+        border: 'none',
+        cursor: 'pointer',
+        fontSize: '13px',
+        fontWeight: '600',
+        transition: 'all 0.2s',
+        fontFamily: 'inherit',
+      },
+      primaryBtn: { background: 'linear-gradient(135deg, #0f6e56 0%, #1a8a6d 100%)', color: 'white' },
+      secondaryBtn: { background: '#f0efeb', color: '#444' },
+      dangerBtn: { background: '#fef2f2', color: '#b91c1c' },
+      modal: {
+        position: 'fixed',
+        top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '20px',
+      },
+      modalContent: {
+        background: 'white',
+        borderRadius: '16px',
+        padding: '24px',
+        width: '100%',
+        maxWidth: '600px',
+        maxHeight: '90vh',
+        overflowY: 'auto',
+      },
+      vendorBadge: {
+        padding: '2px 8px',
+        borderRadius: '10px',
+        fontSize: '9px',
+        fontWeight: '600',
+        color: 'white',
+      },
+    };
+
+    // ============================================
+    // LOGIN SCREEN
+    // ============================================
+    const LoginScreen = () => {
+      const { login } = useAuth();
+      const [username, setUsername] = useState('');
+      const [pin, setPin] = useState('');
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        const result = await login(username, pin);
+        if (!result.success) {
+          setError(result.error);
+        }
+        setLoading(false);
+      };
+
+      const quickLogin = async (u, p) => {
+        setLoading(true);
+        await login(u, p);
+        setLoading(false);
+      };
+
+      return (
+        <div style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'linear-gradient(135deg, #1a4d3e 0%, #0f6e56 50%, #1a8a6d 100%)',
+          padding: '20px',
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '20px',
+            padding: '40px',
+            width: '100%',
+            maxWidth: '400px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '10px' }}>🌱</div>
+              <h1 style={{ fontSize: '24px', color: '#0f6e56', margin: '0 0 5px' }}>Valley View Farm</h1>
+              <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Cooperative POS System</p>
+            </div>
+
+            <form onSubmit={handleSubmit}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>Username</label>
+                <input
+                  style={styles.input}
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="Enter username"
+                  autoComplete="username"
+                />
+              </div>
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>PIN</label>
+                <input
+                  style={styles.input}
+                  type="password"
+                  value={pin}
+                  onChange={e => setPin(e.target.value)}
+                  placeholder="Enter PIN"
+                  maxLength={4}
+                  autoComplete="current-password"
+                />
+              </div>
+              {error && (
+                <div style={{ background: '#fef2f2', color: '#b91c1c', padding: '10px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
+                  {error}
+                </div>
+              )}
+              <button
+                type="submit"
+                style={{ ...styles.button, ...styles.primaryBtn, width: '100%', padding: '14px', fontSize: '15px' }}
+                disabled={loading}
+              >
+                {loading ? 'Logging in...' : 'Login'}
+              </button>
+            </form>
+
+            <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #eee' }}>
+              <p style={{ fontSize: '11px', color: '#888', marginBottom: '12px', textAlign: 'center' }}>Demo Quick Login:</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, fontSize: '11px' }} onClick={() => quickLogin('admin', '1234')}>
+                  👤 Admin
+                </button>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, fontSize: '11px' }} onClick={() => quickLogin('manager', '5678')}>
+                  👔 Manager
+                </button>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, fontSize: '11px' }} onClick={() => quickLogin('cashier', '0000')}>
+                  💵 Cashier
+                </button>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, fontSize: '11px' }} onClick={() => quickLogin('kiosk', '9999')}>
+                  🖥️ Kiosk
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // MAIN APP
+    // ============================================
+    function MainApp() {
+      const { user, logout, hasPermission } = useAuth();
+      const [view, setView] = useState(() => {
+        if (user?.role === 'kiosk') return 'kiosk';
+        if (user?.role === 'cashier') return 'pos';
+        return 'pos';
+      });
+      const [products, setProducts] = useState(PRODUCTS);
+      const [vendors, setVendors] = useState(VENDORS);
+      const [cart, setCart] = useState([]);
+      const [selectedCategory, setSelectedCategory] = useState('vegetables');
+      const [scaleProduct, setScaleProduct] = useState(null);
+      const [weight, setWeight] = useState(0);
+      const [stable, setStable] = useState(true);
+      const [language, setLanguage] = useState('en');
+      const [vendorFilter, setVendorFilter] = useState('all');
+      const [scannerInput, setScannerInput] = useState('');
+      
+      // Modal states
+      const [editingProduct, setEditingProduct] = useState(null);
+      const [editingVendor, setEditingVendor] = useState(null);
+      const [showPayment, setShowPayment] = useState(false);
+      const [showSettings, setShowSettings] = useState(false);
+      const [showDevices, setShowDevices] = useState(false);
+      const [showSettlement, setShowSettlement] = useState(false);
+
+      // Scale simulation
+      const simulateWeigh = useCallback(() => {
+        setStable(false);
+        const targetWeight = (Math.random() * 3 + 0.5).toFixed(2);
+        let current = 0;
+        const interval = setInterval(() => {
+          current += parseFloat(targetWeight) / 10;
+          if (current >= parseFloat(targetWeight)) {
+            setWeight(parseFloat(targetWeight));
+            setStable(true);
+            clearInterval(interval);
+          } else {
+            setWeight(parseFloat(current.toFixed(2)));
+          }
+        }, 100);
+      }, []);
+
+      const findProductByBarcode = (barcode) => {
+        for (const category of Object.keys(products)) {
+          const product = products[category].find(p => p.barcode === barcode);
+          if (product) return { product, category };
+        }
+        return null;
+      };
+
+      const addToCart = (product, quantity, weightValue = null) => {
+        const isWeight = product.unitType === 'weight';
+        const actualQuantity = weightValue || quantity;
+        const lineTotal = isWeight ? product.price * actualQuantity : product.price * quantity;
+        const vendor = vendors[product.vendorId];
+        
+        if (!isWeight) {
+          const existingIndex = cart.findIndex(item => item.id === product.id);
+          if (existingIndex >= 0) {
+            const newCart = [...cart];
+            newCart[existingIndex].quantity += quantity;
+            newCart[existingIndex].total = newCart[existingIndex].quantity * product.price;
+            setCart(newCart);
+            return;
+          }
+        }
+        
+        setCart([...cart, {
+          ...product,
+          cartId: `cart_${Date.now()}_${Math.random()}`,
+          quantity: isWeight ? actualQuantity : quantity,
+          total: lineTotal,
+          isWeight,
+          vendorName: vendor?.name || 'Unknown',
+          vendorColor: vendor?.color || '#666',
+          commissionRate: vendor?.commissionRate || 0,
+        }]);
+      };
+
+      const updateCartItem = (cartId, updates) => {
+        setCart(cart.map(item => {
+          if (item.cartId === cartId) {
+            const newItem = { ...item, ...updates };
+            newItem.total = newItem.isWeight ? newItem.price * newItem.quantity : newItem.price * newItem.quantity;
+            return newItem;
+          }
+          return item;
+        }));
+      };
+
+      const removeCartItem = (cartId) => {
+        setCart(cart.filter(item => item.cartId !== cartId));
+      };
+
+      const refreshProducts = () => setProducts({ ...PRODUCTS });
+      const refreshVendors = () => setVendors({ ...VENDORS });
+
+      const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
+
+      const cartByVendor = useMemo(() => {
+        const grouped = {};
+        cart.forEach(item => {
+          if (!grouped[item.vendorId]) {
+            grouped[item.vendorId] = { vendor: vendors[item.vendorId], items: [], subtotal: 0 };
+          }
+          grouped[item.vendorId].items.push(item);
+          grouped[item.vendorId].subtotal += item.total;
+        });
+        return grouped;
+      }, [cart, vendors]);
+
+      // Determine available views based on role
+      const availableViews = useMemo(() => {
+        const views = [];
+        if (hasPermission('pos') || hasPermission('all')) views.push({ id: 'pos', label: '👤 POS' });
+        if (hasPermission('kiosk') || hasPermission('all')) views.push({ id: 'kiosk', label: '🖥️ Kiosk' });
+        if (hasPermission('vendors') || hasPermission('all')) views.push({ id: 'vendors', label: '🤝 Vendors' });
+        if (hasPermission('inventory') || hasPermission('all')) views.push({ id: 'inventory', label: '📦 Inventory' });
+        if (hasPermission('settings') || hasPermission('all')) views.push({ id: 'admin', label: '⚙️ Admin' });
+        return views;
+      }, [hasPermission]);
+
+      // ============================================
+      // PRODUCT EDIT MODAL
+      // ============================================
+      const ProductEditModal = ({ product, onClose, onSave }) => {
+        const [form, setForm] = useState(product || {
+          name: '', price: '', category: 'vegetables', unitType: 'each', unit: 'each',
+          stock: '', barcode: `00${Date.now().toString().slice(-5)}`, vendorId: 'farm-store',
+          origin: '', minStock: 10, sku: '', image: ''
+        });
+        const [saving, setSaving] = useState(false);
+
+        const handleSave = async () => {
+          setSaving(true);
+          if (product) {
+            await API.products.update(product.id, { ...form, price: parseFloat(form.price), stock: parseInt(form.stock) || 0 });
+          } else {
+            await API.products.create({ ...form, price: parseFloat(form.price), stock: parseInt(form.stock) || 0 });
+          }
+          refreshProducts();
+          setSaving(false);
+          onClose();
+        };
+
+        const handleDelete = async () => {
+          if (confirm('Delete this product?')) {
+            await API.products.delete(product.id);
+            refreshProducts();
+            onClose();
+          }
+        };
+
+        const selectedUnitType = UNIT_TYPES.find(u => u.id === form.unitType);
+
+        return (
+          <div style={styles.modal} onClick={onClose}>
+            <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 20px', fontSize: '18px' }}>
+                {product ? '✏️ Edit Product' : '➕ New Product'}
+              </h2>
+              
+              <div style={{ display: 'grid', gap: '12px' }}>
+                <div style={{ background: '#f0fdf4', padding: '12px', borderRadius: '8px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: '#0f6e56', display: 'block', marginBottom: '6px' }}>Vendor</label>
+                  <select style={styles.input} value={form.vendorId} onChange={e => setForm({ ...form, vendorId: e.target.value })}>
+                    {Object.values(vendors).map(v => (
+                      <option key={v.id} value={v.id}>{v.name} ({v.commissionRate}%)</option>
+                    ))}
+                  </select>
+                </div>
+
+                <input style={styles.input} placeholder="Product name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Category</label>
+                    <select style={styles.input} value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                      {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Price *</label>
+                    <input style={styles.input} type="number" step="0.01" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Stock</label>
+                    <input style={styles.input} type="number" value={form.stock} onChange={e => setForm({ ...form, stock: e.target.value })} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Unit Type</label>
+                    <select style={styles.input} value={form.unitType} onChange={e => {
+                      const ut = UNIT_TYPES.find(u => u.id === e.target.value);
+                      setForm({ ...form, unitType: e.target.value, unit: ut.units[0] });
+                    }}>
+                      {UNIT_TYPES.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Unit</label>
+                    <select style={styles.input} value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}>
+                      {selectedUnitType?.units.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Min Stock</label>
+                    <input style={styles.input} type="number" value={form.minStock} onChange={e => setForm({ ...form, minStock: parseInt(e.target.value) || 0 })} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input style={styles.input} placeholder="SKU" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
+                  <input style={styles.input} placeholder="Barcode" value={form.barcode} onChange={e => setForm({ ...form, barcode: e.target.value })} />
+                </div>
+
+                <input style={styles.input} placeholder="Origin / Location" value={form.origin} onChange={e => setForm({ ...form, origin: e.target.value })} />
+                <input style={styles.input} placeholder="Image URL" value={form.image} onChange={e => setForm({ ...form, image: e.target.value })} />
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                  {product && (
+                    <button style={{ ...styles.button, ...styles.dangerBtn }} onClick={handleDelete}>Delete</button>
+                  )}
+                  <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }} onClick={onClose}>Cancel</button>
+                  <button style={{ ...styles.button, ...styles.primaryBtn, flex: 2 }} onClick={handleSave} disabled={saving || !form.name || !form.price}>
+                    {saving ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // VENDOR EDIT MODAL
+      // ============================================
+      const VendorEditModal = ({ vendor, onClose }) => {
+        const [form, setForm] = useState(vendor || {
+          name: '', type: 'consignment', commissionRate: 15, contact: '', paymentMethod: 'check',
+          paymentTerms: 'net-15', color: '#666666', active: true, address: '', phone: ''
+        });
+        const [saving, setSaving] = useState(false);
+
+        const handleSave = async () => {
+          setSaving(true);
+          if (vendor) {
+            await API.vendors.update(vendor.id, form);
+          } else {
+            await API.vendors.create(form);
+          }
+          refreshVendors();
+          setSaving(false);
+          onClose();
+        };
+
+        const handleDelete = async () => {
+          if (confirm('Delete this vendor? Products will need reassignment.')) {
+            await API.vendors.delete(vendor.id);
+            refreshVendors();
+            onClose();
+          }
+        };
+
+        return (
+          <div style={styles.modal} onClick={onClose}>
+            <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 20px', fontSize: '18px' }}>
+                {vendor ? '✏️ Edit Vendor' : '➕ New Vendor'}
+              </h2>
+              
+              <div style={{ display: 'grid', gap: '12px' }}>
+                <input style={styles.input} placeholder="Vendor name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Type</label>
+                    <select style={styles.input} value={form.type} onChange={e => setForm({ ...form, type: e.target.value, commissionRate: e.target.value === 'owner' ? 0 : form.commissionRate })}>
+                      <option value="owner">Farm Store (Owner)</option>
+                      <option value="consignment">Consignment</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Commission %</label>
+                    <input style={styles.input} type="number" value={form.commissionRate} onChange={e => setForm({ ...form, commissionRate: parseFloat(e.target.value) || 0 })} disabled={form.type === 'owner'} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Payment Method</label>
+                    <select style={styles.input} value={form.paymentMethod} onChange={e => setForm({ ...form, paymentMethod: e.target.value })}>
+                      <option value="check">Check</option>
+                      <option value="ach">ACH Transfer</option>
+                      <option value="internal">Internal</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#666' }}>Payment Terms</label>
+                    <select style={styles.input} value={form.paymentTerms} onChange={e => setForm({ ...form, paymentTerms: e.target.value })}>
+                      <option value="net-7">Net 7</option>
+                      <option value="net-15">Net 15</option>
+                      <option value="net-30">Net 30</option>
+                      <option value="internal">Internal</option>
+                    </select>
+                  </div>
+                </div>
+
+                <input style={styles.input} placeholder="Contact email" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+                <input style={styles.input} placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+                <input style={styles.input} placeholder="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label style={{ fontSize: '12px' }}>Color:</label>
+                  <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} style={{ width: '60px', height: '36px', border: 'none', cursor: 'pointer' }} />
+                  <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                    <input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} />
+                    Active
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                  {vendor && vendor.type !== 'owner' && (
+                    <button style={{ ...styles.button, ...styles.dangerBtn }} onClick={handleDelete}>Delete</button>
+                  )}
+                  <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1 }} onClick={onClose}>Cancel</button>
+                  <button style={{ ...styles.button, ...styles.primaryBtn, flex: 2 }} onClick={handleSave} disabled={saving || !form.name}>
+                    {saving ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // DEVICE CONFIGURATION MODAL
+      // ============================================
+      const DeviceConfigModal = ({ onClose }) => {
+        const [devices, setDevices] = useState(DEVICES);
+        const [testing, setTesting] = useState(null);
+
+        const handleToggle = async (id) => {
+          const device = devices.find(d => d.id === id);
+          await API.devices.update(id, { enabled: !device.enabled });
+          setDevices(devices.map(d => d.id === id ? { ...d, enabled: !d.enabled } : d));
+        };
+
+        const handleTest = async (id) => {
+          setTesting(id);
+          const result = await API.devices.test(id);
+          alert(result.success ? 'Device test successful!' : 'Device test failed');
+          setTesting(null);
+        };
+
+        const deviceIcons = { scanner: '📷', printer: '🖨️', scale: '⚖️', cashDrawer: '💵', cardReader: '💳', labelPrinter: '🏷️', customerDisplay: '🖥️' };
+
+        return (
+          <div style={styles.modal} onClick={onClose}>
+            <div style={{ ...styles.modalContent, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 20px', fontSize: '18px' }}>🔌 Peripheral Devices</h2>
+              
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {devices.map(device => (
+                  <div key={device.id} style={{
+                    padding: '14px',
+                    borderRadius: '10px',
+                    border: `2px solid ${device.status === 'connected' ? '#22c55e' : '#f59e0b'}`,
+                    background: device.enabled ? 'white' : '#f9fafb',
+                    opacity: device.enabled ? 1 : 0.7,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '24px' }}>{deviceIcons[device.type]}</span>
+                        <div>
+                          <div style={{ fontWeight: '600', fontSize: '14px' }}>{device.name}</div>
+                          <div style={{ fontSize: '11px', color: '#666' }}>{device.model}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: '10px',
+                          fontSize: '10px',
+                          fontWeight: '600',
+                          background: device.status === 'connected' ? '#dcfce7' : '#fef3c7',
+                          color: device.status === 'connected' ? '#166534' : '#92400e',
+                        }}>
+                          {device.status}
+                        </span>
+                        <button
+                          style={{ ...styles.button, ...styles.secondaryBtn, padding: '6px 10px', fontSize: '11px' }}
+                          onClick={() => handleTest(device.id)}
+                          disabled={testing === device.id}
+                        >
+                          {testing === device.id ? '...' : 'Test'}
+                        </button>
+                        <button
+                          style={{
+                            width: '44px',
+                            height: '24px',
+                            borderRadius: '12px',
+                            border: 'none',
+                            background: device.enabled ? '#0f6e56' : '#ccc',
+                            cursor: 'pointer',
+                            position: 'relative',
+                          }}
+                          onClick={() => handleToggle(device.id)}
+                        >
+                          <div style={{
+                            width: '18px',
+                            height: '18px',
+                            borderRadius: '9px',
+                            background: 'white',
+                            position: 'absolute',
+                            top: '3px',
+                            left: device.enabled ? '23px' : '3px',
+                            transition: 'left 0.2s',
+                          }} />
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: '10px', fontSize: '11px', color: '#888', display: 'flex', gap: '16px' }}>
+                      <span>Connection: {device.connection}</span>
+                      <span>Port: {device.port}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: '16px', padding: '12px', background: '#f0f9ff', borderRadius: '8px', fontSize: '12px', color: '#0369a1' }}>
+                <strong>💡 Tip:</strong> USB barcode scanners work without configuration. Scales may require the Web Serial API (Chrome) or a local bridge service.
+              </div>
+
+              <button style={{ ...styles.button, ...styles.secondaryBtn, width: '100%', marginTop: '16px' }} onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // PAYMENT MODAL
+      // ============================================
+      const PaymentModal = () => {
+        const [processing, setProcessing] = useState(false);
+
+        const completeSale = async (method) => {
+          setProcessing(true);
+          await API.transactions.create({
+            items: cart.map(item => ({
+              productId: item.id, name: item.name, vendorId: item.vendorId,
+              quantity: item.quantity, price: item.price, total: item.total, isWeight: item.isWeight
+            })),
+            paymentMethod: method,
+            total: cartTotal,
+            cashier: user.name,
+          });
+          // Update stock
+          for (const item of cart) {
+            await API.products.updateStock(item.id, item.isWeight ? 1 : item.quantity, 'subtract');
+          }
+          refreshProducts();
+          setCart([]);
+          setProcessing(false);
+          setShowPayment(false);
+        };
+
+        return (
+          <div style={styles.modal} onClick={() => !processing && setShowPayment(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: '450px' }} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 16px', fontSize: '18px' }}>💳 Complete Sale</h2>
+              
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '11px', color: '#666', marginBottom: '6px' }}>By Vendor:</div>
+                {Object.entries(cartByVendor).map(([vendorId, data]) => (
+                  <div key={vendorId} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 10px', marginBottom: '4px', background: '#f8f7f4', borderRadius: '6px',
+                    borderLeft: `3px solid ${data.vendor?.color || '#666'}`,
+                  }}>
+                    <span style={{ fontSize: '12px' }}>{data.vendor?.name}</span>
+                    <span style={{ fontWeight: '600', fontSize: '13px' }}>${data.subtotal.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ fontSize: '28px', fontWeight: '700', color: '#0f6e56', textAlign: 'center', marginBottom: '20px', padding: '16px', background: '#f0fdf4', borderRadius: '10px' }}>
+                ${cartTotal.toFixed(2)}
+              </div>
+
+              <div style={{ display: 'grid', gap: '8px', marginBottom: '16px' }}>
+                <button style={{ ...styles.button, ...styles.primaryBtn, padding: '14px' }} onClick={() => completeSale('card')} disabled={processing}>
+                  {processing ? 'Processing...' : '💳 Card'}
+                </button>
+                <button style={{ ...styles.button, ...styles.secondaryBtn, padding: '14px' }} onClick={() => completeSale('cash')} disabled={processing}>
+                  💵 Cash
+                </button>
+              </div>
+
+              <button style={{ ...styles.button, ...styles.dangerBtn, width: '100%' }} onClick={() => setShowPayment(false)} disabled={processing}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // SCALE COMPONENT
+      // ============================================
+      const ScalePanel = ({ product, onAdd, onCancel }) => (
+        <div style={{
+          background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+          border: '2px solid #d97706',
+          borderRadius: '12px',
+          padding: '16px',
+          marginBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <img src={product.image} alt="" style={{ width: '50px', height: '50px', borderRadius: '8px', objectFit: 'cover' }} />
+            <div>
+              <div style={{ fontWeight: '600', color: '#92400e', fontSize: '14px' }}>{product.name}</div>
+              <div style={{ fontSize: '12px', color: '#b45309' }}>${product.price.toFixed(2)}/lb</div>
+            </div>
+          </div>
+          <div style={{ fontSize: '36px', fontWeight: '700', textAlign: 'center', color: '#78350f', fontFamily: 'monospace' }}>
+            {weight.toFixed(2)} lb
+          </div>
+          <div style={{ textAlign: 'center', fontSize: '11px', color: '#92400e', marginBottom: '12px' }}>
+            {stable ? '✓ Stable' : '○ Measuring...'}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1, fontSize: '12px' }} onClick={onCancel}>Cancel</button>
+            <button style={{ ...styles.button, ...styles.secondaryBtn, flex: 1, fontSize: '12px' }} onClick={simulateWeigh}>Re-weigh</button>
+            <button
+              style={{ ...styles.button, ...styles.primaryBtn, flex: 2, fontSize: '12px' }}
+              onClick={() => { if (stable && weight > 0) { onAdd(product, 1, weight); onCancel(); } }}
+              disabled={!stable || weight === 0}
+            >
+              Add ${(product.price * weight).toFixed(2)}
+            </button>
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // CART COMPONENT (Editable)
+      // ============================================
+      const CartPanel = ({ editable = true, compact = false }) => (
+        <div style={{ ...styles.card, flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <span style={{ fontWeight: '600', fontSize: '14px' }}>🛒 Cart ({cart.length})</span>
+            {cart.length > 0 && (
+              <button style={{ ...styles.button, ...styles.secondaryBtn, padding: '4px 8px', fontSize: '10px' }} onClick={() => setCart([])}>
+                Clear
+              </button>
+            )}
+          </div>
+
+          <div style={{ maxHeight: compact ? '200px' : '280px', overflowY: 'auto', marginBottom: '10px' }}>
+            {cart.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#888', padding: '20px', fontSize: '12px' }}>Empty</div>
+            ) : (
+              cart.map((item) => (
+                <div key={item.cartId} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '8px 0', borderBottom: '1px solid #eee',
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '500', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: item.vendorColor }} />
+                      {item.name}
+                    </div>
+                    {editable ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                        <button
+                          style={{ width: '22px', height: '22px', borderRadius: '4px', border: '1px solid #ddd', background: '#f5f5f5', cursor: 'pointer', fontSize: '12px' }}
+                          onClick={() => item.quantity > (item.isWeight ? 0.1 : 1) && updateCartItem(item.cartId, { quantity: item.isWeight ? +(item.quantity - 0.1).toFixed(2) : item.quantity - 1 })}
+                        >-</button>
+                        <span style={{ fontSize: '12px', minWidth: '40px', textAlign: 'center' }}>
+                          {item.isWeight ? item.quantity.toFixed(2) : item.quantity}
+                        </span>
+                        <button
+                          style={{ width: '22px', height: '22px', borderRadius: '4px', border: '1px solid #ddd', background: '#f5f5f5', cursor: 'pointer', fontSize: '12px' }}
+                          onClick={() => updateCartItem(item.cartId, { quantity: item.isWeight ? +(item.quantity + 0.1).toFixed(2) : item.quantity + 1 })}
+                        >+</button>
+                        <span style={{ fontSize: '10px', color: '#888' }}>× ${item.price.toFixed(2)}</span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '11px', color: '#888' }}>
+                        {item.isWeight ? `${item.quantity.toFixed(2)} lb` : `${item.quantity}`} × ${item.price.toFixed(2)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontWeight: '600', color: '#0f6e56', fontSize: '12px' }}>${item.total.toFixed(2)}</span>
+                    {editable && (
+                      <button
+                        style={{ width: '20px', height: '20px', borderRadius: '4px', border: 'none', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '10px' }}
+                        onClick={() => removeCartItem(item.cartId)}
+                      >✕</button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderTop: '2px solid #0f6e56', fontSize: '16px', fontWeight: '700' }}>
+            <span>Total</span>
+            <span style={{ color: '#0f6e56' }}>${cartTotal.toFixed(2)}</span>
+          </div>
+
+          <button
+            style={{ ...styles.button, ...styles.primaryBtn, width: '100%', padding: '12px', fontSize: '14px', opacity: cart.length === 0 ? 0.5 : 1 }}
+            disabled={cart.length === 0}
+            onClick={() => setShowPayment(true)}
+          >
+            💳 Pay Now
+          </button>
+        </div>
+      );
+
+      // ============================================
+      // POS VIEW
+      // ============================================
+      const renderPOS = () => (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '16px', padding: '16px', maxWidth: '1500px', margin: '0 auto' }}>
+          <div style={styles.card}>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+              <input
+                style={{ ...styles.input, flex: '1', minWidth: '140px' }}
+                placeholder="🔍 Scan barcode..."
+                value={scannerInput}
+                onChange={e => setScannerInput(e.target.value)}
+                onKeyPress={e => {
+                  if (e.key === 'Enter') {
+                    const result = findProductByBarcode(scannerInput);
+                    if (result) {
+                      if (result.product.unitType === 'weight') {
+                        setScaleProduct(result.product);
+                        simulateWeigh();
+                      } else {
+                        addToCart(result.product, 1);
+                      }
+                    }
+                    setScannerInput('');
+                  }
+                }}
+              />
+              <select style={{ ...styles.input, width: '120px' }} value={vendorFilter} onChange={e => setVendorFilter(e.target.value)}>
+                <option value="all">All Vendors</option>
+                {Object.values(vendors).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              {hasPermission('inventory') && (
+                <button style={{ ...styles.button, ...styles.primaryBtn }} onClick={() => setEditingProduct({})}>➕</button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '5px', marginBottom: '12px', flexWrap: 'wrap' }}>
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat.id}
+                  style={{
+                    padding: '6px 12px', borderRadius: '14px', border: '2px solid ' + cat.color,
+                    background: selectedCategory === cat.id ? cat.color : 'white',
+                    color: selectedCategory === cat.id ? 'white' : cat.color,
+                    fontSize: '11px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                  onClick={() => setSelectedCategory(cat.id)}
+                >
+                  {cat.icon} {cat.name}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px' }}>
+              {products[selectedCategory]?.filter(p => vendorFilter === 'all' || p.vendorId === vendorFilter).map(product => {
+                const vendor = vendors[product.vendorId];
+                return (
+                  <div
+                    key={product.id}
+                    style={{
+                      background: '#fafaf8', border: `1px solid ${product.stock < product.minStock ? '#fecaca' : '#e8e5dc'}`,
+                      borderRadius: '10px', padding: '10px', cursor: 'pointer', textAlign: 'center', position: 'relative',
+                    }}
+                    onClick={() => {
+                      if (product.unitType === 'weight') {
+                        setScaleProduct(product);
+                        simulateWeigh();
+                      } else {
+                        addToCart(product, 1);
+                      }
+                    }}
+                  >
+                    <span style={{ ...styles.vendorBadge, position: 'absolute', top: '6px', left: '6px', background: vendor?.color }}>{vendor?.name?.split(' ')[0]}</span>
+                    <img src={product.image} alt="" style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', marginBottom: '6px' }} />
+                    <div style={{ fontSize: '11px', fontWeight: '600', marginBottom: '3px', lineHeight: '1.2' }}>{product.name}</div>
+                    <div style={{ fontSize: '13px', fontWeight: '700', color: '#0f6e56' }}>
+                      ${product.price.toFixed(2)}<span style={{ fontSize: '9px', fontWeight: '400', color: '#666' }}>/{product.unit}</span>
+                    </div>
+                    <div style={{ fontSize: '9px', color: product.stock < product.minStock ? '#dc2626' : '#666', marginTop: '2px' }}>
+                      {product.unitType === 'weight' ? '⚖️ ' : ''}Stock: {product.stock}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {scaleProduct && <ScalePanel product={scaleProduct} onAdd={addToCart} onCancel={() => { setScaleProduct(null); setWeight(0); }} />}
+            <CartPanel />
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // KIOSK VIEW (Enhanced with scale and cart editing)
+      // ============================================
+      const renderKiosk = () => {
+        const t = {
+          en: { welcome: 'Welcome', subtitle: 'Tap items to add • Supporting local farms', basket: 'Your Basket', pay: 'Pay', clear: 'Clear', weigh: 'Place on scale', edit: 'Edit', done: 'Done' },
+          es: { welcome: 'Bienvenido', subtitle: 'Toque artículos • Apoyando granjas locales', basket: 'Tu Canasta', pay: 'Pagar', clear: 'Borrar', weigh: 'Colocar en báscula', edit: 'Editar', done: 'Listo' }
+        }[language];
+
+        const [showCart, setShowCart] = useState(false);
+        const [editingCart, setEditingCart] = useState(false);
+
+        return (
+          <div style={{ ...styles.app, paddingBottom: '180px' }}>
+            <button
+              style={{ position: 'fixed', top: '12px', right: '12px', background: 'white', padding: '8px 12px', borderRadius: '16px', border: '1px solid #ddd', fontSize: '12px', cursor: 'pointer', zIndex: 100, fontFamily: 'inherit' }}
+              onClick={() => setLanguage(language === 'en' ? 'es' : 'en')}
+            >
+              {language === 'en' ? '🇺🇸' : '🇲🇽'}
+            </button>
+
+            {hasPermission('all') && (
+              <button
+                style={{ position: 'fixed', top: '12px', left: '12px', background: '#0f6e56', color: 'white', padding: '8px 12px', borderRadius: '16px', border: 'none', fontSize: '11px', cursor: 'pointer', zIndex: 100, fontFamily: 'inherit' }}
+                onClick={() => setView('pos')}
+              >
+                Exit Kiosk
+              </button>
+            )}
+
+            <div style={{ maxWidth: '800px', margin: '0 auto', padding: '16px' }}>
+              <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                <div style={{ fontSize: '24px', fontWeight: '700', color: '#0f6e56' }}>🌱 {t.welcome}</div>
+                <div style={{ color: '#666', fontSize: '13px' }}>{t.subtitle}</div>
+              </div>
+
+              {scaleProduct && <ScalePanel product={scaleProduct} onAdd={addToCart} onCancel={() => { setScaleProduct(null); setWeight(0); }} />}
+
+              <div style={{ display: 'flex', gap: '5px', marginBottom: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat.id}
+                    style={{
+                      padding: '8px 14px', borderRadius: '16px', border: '2px solid ' + cat.color,
+                      background: selectedCategory === cat.id ? cat.color : 'white',
+                      color: selectedCategory === cat.id ? 'white' : cat.color,
+                      fontSize: '12px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                    onClick={() => setSelectedCategory(cat.id)}
+                  >
+                    {cat.icon} {cat.name}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px' }}>
+                {products[selectedCategory]?.map(product => (
+                  <div
+                    key={product.id}
+                    style={{ background: 'white', borderRadius: '14px', padding: '12px', textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', cursor: 'pointer' }}
+                    onClick={() => {
+                      if (product.unitType === 'weight') {
+                        setScaleProduct(product);
+                        simulateWeigh();
+                      } else {
+                        addToCart(product, 1);
+                      }
+                    }}
+                  >
+                    <img src={product.image} alt="" style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '10px', marginBottom: '8px' }} />
+                    <div style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>{product.name}</div>
+                    <div style={{ fontSize: '15px', fontWeight: '700', color: '#0f6e56' }}>
+                      ${product.price.toFixed(2)}<span style={{ fontSize: '10px', fontWeight: '400', color: '#666' }}>/{product.unit}</span>
+                    </div>
+                    {product.unitType === 'weight' && <div style={{ fontSize: '10px', color: '#d97706', marginTop: '4px' }}>⚖️ {t.weigh}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Cart Drawer */}
+            {showCart && (
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200 }} onClick={() => setShowCart(false)}>
+                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'white', borderRadius: '20px 20px 0 0', padding: '20px', maxHeight: '70vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h3 style={{ margin: 0, fontSize: '18px' }}>🛒 {t.basket}</h3>
+                    <button style={{ ...styles.button, ...styles.secondaryBtn, fontSize: '11px' }} onClick={() => setEditingCart(!editingCart)}>
+                      {editingCart ? t.done : t.edit}
+                    </button>
+                  </div>
+                  
+                  {cart.map(item => (
+                    <div key={item.cartId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #eee' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: '500', fontSize: '13px' }}>{item.name}</div>
+                        {editingCart ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                            <button style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #ddd', background: '#f5f5f5', cursor: 'pointer' }}
+                              onClick={() => item.quantity > (item.isWeight ? 0.1 : 1) && updateCartItem(item.cartId, { quantity: item.isWeight ? +(item.quantity - 0.1).toFixed(2) : item.quantity - 1 })}>-</button>
+                            <span style={{ minWidth: '50px', textAlign: 'center' }}>{item.isWeight ? item.quantity.toFixed(2) + ' lb' : item.quantity}</span>
+                            <button style={{ width: '28px', height: '28px', borderRadius: '6px', border: '1px solid #ddd', background: '#f5f5f5', cursor: 'pointer' }}
+                              onClick={() => updateCartItem(item.cartId, { quantity: item.isWeight ? +(item.quantity + 0.1).toFixed(2) : item.quantity + 1 })}>+</button>
+                            <button style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: '6px', border: 'none', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '12px' }}
+                              onClick={() => removeCartItem(item.cartId)}>Remove</button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '12px', color: '#888' }}>{item.isWeight ? item.quantity.toFixed(2) + ' lb' : item.quantity} × ${item.price.toFixed(2)}</div>
+                        )}
+                      </div>
+                      <span style={{ fontWeight: '600', color: '#0f6e56', fontSize: '14px' }}>${item.total.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '16px 0', borderTop: '2px solid #0f6e56', fontSize: '20px', fontWeight: '700', marginTop: '10px' }}>
+                    <span>Total</span>
+                    <span style={{ color: '#0f6e56' }}>${cartTotal.toFixed(2)}</span>
+                  </div>
+                  
+                  <button style={{ ...styles.button, ...styles.primaryBtn, width: '100%', padding: '16px', fontSize: '16px' }} disabled={cart.length === 0} onClick={() => { setShowCart(false); setShowPayment(true); }}>
+                    {t.pay} →
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Bottom Bar */}
+            <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white', padding: '14px 20px', boxShadow: '0 -4px 20px rgba(0,0,0,0.12)', borderRadius: '20px 20px 0 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div onClick={() => cart.length > 0 && setShowCart(true)} style={{ cursor: cart.length > 0 ? 'pointer' : 'default' }}>
+                  <div style={{ fontSize: '12px', color: '#666' }}>{t.basket} ({cart.length})</div>
+                  <div style={{ fontSize: '22px', fontWeight: '700', color: '#0f6e56' }}>${cartTotal.toFixed(2)}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button style={{ ...styles.button, ...styles.secondaryBtn }} onClick={() => setCart([])}>{t.clear}</button>
+                  <button style={{ ...styles.button, ...styles.primaryBtn, padding: '12px 24px' }} disabled={cart.length === 0} onClick={() => setShowPayment(true)}>
+                    {t.pay} →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // VENDORS VIEW
+      // ============================================
+      const renderVendors = () => (
+        <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+            <h2 style={{ margin: 0, fontSize: '18px' }}>🤝 Vendors</h2>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button style={{ ...styles.button, ...styles.secondaryBtn }} onClick={() => setShowSettlement(true)}>💰 Settlement</button>
+              <button style={{ ...styles.button, ...styles.primaryBtn }} onClick={() => setEditingVendor({})}>➕ Add Vendor</button>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
+            {Object.values(vendors).map(vendor => {
+              const vendorProducts = Object.values(products).flat().filter(p => p.vendorId === vendor.id);
+              return (
+                <div key={vendor.id} style={{ ...styles.card, borderTop: `4px solid ${vendor.color}`, cursor: 'pointer' }} onClick={() => setEditingVendor(vendor)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                    <div>
+                      <div style={{ fontWeight: '600', fontSize: '15px', marginBottom: '4px' }}>{vendor.name}</div>
+                      <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '600', background: vendor.type === 'owner' ? '#dcfce7' : '#fef3c7', color: vendor.type === 'owner' ? '#166534' : '#92400e' }}>
+                        {vendor.type === 'owner' ? 'Farm Store' : 'Consignment'}
+                      </span>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '24px', fontWeight: '700', color: vendor.color }}>{vendor.commissionRate}%</div>
+                      <div style={{ fontSize: '9px', color: '#888' }}>Commission</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+                    <div style={{ background: '#f8f7f4', padding: '8px', borderRadius: '6px' }}>
+                      <div style={{ fontWeight: '600', color: '#0f6e56' }}>{vendorProducts.length}</div>
+                      <div style={{ fontSize: '10px', color: '#666' }}>Products</div>
+                    </div>
+                    <div style={{ background: '#f8f7f4', padding: '8px', borderRadius: '6px' }}>
+                      <div style={{ fontWeight: '600', color: '#185FA5' }}>{vendor.paymentTerms}</div>
+                      <div style={{ fontSize: '10px', color: '#666' }}>Terms</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>{vendor.contact}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // INVENTORY VIEW
+      // ============================================
+      const renderInventory = () => {
+        const allProducts = Object.values(products).flat();
+        const filtered = vendorFilter === 'all' ? allProducts : allProducts.filter(p => p.vendorId === vendorFilter);
+
+        return (
+          <div style={{ padding: '16px', maxWidth: '1400px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px' }}>📦 Inventory</h2>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <select style={{ ...styles.input, width: '150px' }} value={vendorFilter} onChange={e => setVendorFilter(e.target.value)}>
+                  <option value="all">All Vendors</option>
+                  {Object.values(vendors).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+                <button style={{ ...styles.button, ...styles.primaryBtn }} onClick={() => setEditingProduct({})}>➕ Add Product</button>
+              </div>
+            </div>
+
+            <div style={{ ...styles.card, overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ background: '#0f6e56', color: 'white' }}>
+                    <th style={{ padding: '10px', textAlign: 'left' }}>Product</th>
+                    <th style={{ padding: '10px', textAlign: 'left' }}>Vendor</th>
+                    <th style={{ padding: '10px', textAlign: 'left' }}>SKU</th>
+                    <th style={{ padding: '10px', textAlign: 'right' }}>Price</th>
+                    <th style={{ padding: '10px', textAlign: 'right' }}>Stock</th>
+                    <th style={{ padding: '10px', textAlign: 'center' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(product => {
+                    const vendor = vendors[product.vendorId];
+                    return (
+                      <tr key={product.id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <img src={product.image} alt="" style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'cover' }} />
+                            <div>
+                              <div style={{ fontWeight: '500' }}>{product.name}</div>
+                              <div style={{ fontSize: '10px', color: '#888' }}>{product.category}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px' }}>
+                          <span style={{ ...styles.vendorBadge, background: vendor?.color }}>{vendor?.name}</span>
+                        </td>
+                        <td style={{ padding: '10px', fontFamily: 'monospace', fontSize: '11px' }}>{product.sku || product.barcode}</td>
+                        <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600' }}>${product.price.toFixed(2)}/{product.unit}</td>
+                        <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: product.stock < product.minStock ? '#dc2626' : '#0f6e56' }}>
+                          {product.stock}
+                          {product.stock < product.minStock && <span style={{ marginLeft: '4px', fontSize: '10px' }}>⚠️</span>}
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'center' }}>
+                          <button style={{ ...styles.button, ...styles.secondaryBtn, padding: '4px 10px', fontSize: '10px' }} onClick={() => setEditingProduct(product)}>
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginTop: '16px' }}>
+              <div style={{ ...styles.card, background: '#f0fdf4', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: '700', color: '#0f6e56' }}>{allProducts.length}</div>
+                <div style={{ fontSize: '11px', color: '#666' }}>Total Products</div>
+              </div>
+              <div style={{ ...styles.card, background: '#fef3c7', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: '700', color: '#92400e' }}>{allProducts.filter(p => p.stock < p.minStock).length}</div>
+                <div style={{ fontSize: '11px', color: '#666' }}>Low Stock</div>
+              </div>
+              <div style={{ ...styles.card, background: '#eff6ff', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: '700', color: '#1e40af' }}>{allProducts.reduce((s, p) => s + p.stock, 0)}</div>
+                <div style={{ fontSize: '11px', color: '#666' }}>Total Units</div>
+              </div>
+              <div style={{ ...styles.card, background: '#fdf2f8', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: '700', color: '#9d174d' }}>${allProducts.reduce((s, p) => s + p.stock * p.price, 0).toFixed(0)}</div>
+                <div style={{ fontSize: '11px', color: '#666' }}>Value</div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // ADMIN VIEW
+      // ============================================
+      const renderAdmin = () => (
+        <div style={{ padding: '16px', maxWidth: '900px', margin: '0 auto' }}>
+          <h2 style={{ margin: '0 0 16px', fontSize: '18px' }}>⚙️ Admin Settings</h2>
+
+          <div style={{ display: 'grid', gap: '12px' }}>
+            <div style={{ ...styles.card, cursor: 'pointer' }} onClick={() => setShowDevices(true)}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: '600', marginBottom: '4px' }}>🔌 Peripheral Devices</div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>{DEVICES.filter(d => d.enabled).length} devices enabled</div>
+                </div>
+                <span style={{ fontSize: '20px' }}>→</span>
+              </div>
+            </div>
+
+            <div style={styles.card}>
+              <div style={{ fontWeight: '600', marginBottom: '12px' }}>👥 User Accounts</div>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {USERS.map(u => (
+                  <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: '#f8f7f4', borderRadius: '8px' }}>
+                    <div>
+                      <span style={{ fontWeight: '500', fontSize: '13px' }}>{u.name}</span>
+                      <span style={{ marginLeft: '8px', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', background: u.role === 'admin' ? '#fef3c7' : '#e0e7ff', color: u.role === 'admin' ? '#92400e' : '#4338ca' }}>{u.role}</span>
+                    </div>
+                    <span style={{ fontSize: '11px', color: '#888' }}>PIN: ****</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.card}>
+              <div style={{ fontWeight: '600', marginBottom: '12px' }}>🏪 Store Settings</div>
+              <div style={{ display: 'grid', gap: '10px' }}>
+                <div>
+                  <label style={{ fontSize: '11px', color: '#666' }}>Store Name</label>
+                  <input style={styles.input} value={SETTINGS.storeName} onChange={e => SETTINGS.storeName = e.target.value} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '11px', color: '#666' }}>Receipt Header</label>
+                  <input style={styles.input} value={SETTINGS.receiptHeader} onChange={e => SETTINGS.receiptHeader = e.target.value} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label style={{ fontSize: '12px' }}>Kiosk Mode Enabled</label>
+                  <input type="checkbox" checked={SETTINGS.kioskEnabled} onChange={e => SETTINGS.kioskEnabled = e.target.checked} />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ ...styles.card, background: '#f0f9ff', borderLeft: '4px solid #0ea5e9' }}>
+              <div style={{ fontWeight: '600', marginBottom: '8px', color: '#0369a1' }}>🗄️ Database</div>
+              <div style={{ fontSize: '12px', color: '#0c4a6e' }}>
+                <p style={{ marginBottom: '8px' }}>Target: PostgreSQL on Raspberry Pi 5</p>
+                <p>API: REST/JSON compatible with Odoo integration</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ============================================
+      // SETTLEMENT MODAL
+      // ============================================
+      const SettlementModal = () => {
+        const settlements = useMemo(() => {
+          const data = {};
+          Object.values(vendors).forEach(v => {
+            data[v.id] = { vendor: v, gross: 0, commission: 0, net: 0, items: 0 };
+          });
+          TRANSACTIONS.forEach(txn => {
+            txn.items.forEach(item => {
+              if (data[item.vendorId]) {
+                const comm = item.total * (vendors[item.vendorId]?.commissionRate || 0) / 100;
+                data[item.vendorId].gross += item.total;
+                data[item.vendorId].commission += comm;
+                data[item.vendorId].net += item.total - comm;
+                data[item.vendorId].items += item.quantity;
+              }
+            });
+          });
+          return data;
+        }, []);
+
+        return (
+          <div style={styles.modal} onClick={() => setShowSettlement(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+              <h2 style={{ margin: '0 0 16px', fontSize: '18px' }}>💰 Settlement Report</h2>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                <div style={{ background: '#f0fdf4', padding: '14px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '22px', fontWeight: '700', color: '#0f6e56' }}>${Object.values(settlements).reduce((s, v) => s + v.gross, 0).toFixed(2)}</div>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Total Sales</div>
+                </div>
+                <div style={{ background: '#fef3c7', padding: '14px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '22px', fontWeight: '700', color: '#92400e' }}>${Object.values(settlements).reduce((s, v) => s + v.commission, 0).toFixed(2)}</div>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Commission</div>
+                </div>
+                <div style={{ background: '#eff6ff', padding: '14px', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '22px', fontWeight: '700', color: '#1e40af' }}>${Object.values(settlements).filter(v => v.vendor.type === 'consignment').reduce((s, v) => s + v.net, 0).toFixed(2)}</div>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Due to Vendors</div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {Object.values(settlements).filter(s => s.gross > 0).sort((a, b) => b.gross - a.gross).map(s => (
+                  <div key={s.vendor.id} style={{ padding: '12px', borderRadius: '10px', border: `2px solid ${s.vendor.color}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: s.vendor.color }} />
+                        <span style={{ fontWeight: '600', fontSize: '13px' }}>{s.vendor.name}</span>
+                        <span style={{ fontSize: '10px', color: '#888' }}>{s.vendor.commissionRate}%</span>
+                      </div>
+                      {s.vendor.type === 'consignment' && (
+                        <button style={{ ...styles.button, ...styles.primaryBtn, padding: '4px 10px', fontSize: '10px' }}>Pay</button>
+                      )}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '10px', fontSize: '11px' }}>
+                      <div><div style={{ color: '#888' }}>Gross</div><div style={{ fontWeight: '600' }}>${s.gross.toFixed(2)}</div></div>
+                      <div><div style={{ color: '#888' }}>Commission</div><div style={{ fontWeight: '600', color: '#dc2626' }}>-${s.commission.toFixed(2)}</div></div>
+                      <div><div style={{ color: '#888' }}>Net</div><div style={{ fontWeight: '700', color: '#0f6e56' }}>${s.net.toFixed(2)}</div></div>
+                      <div><div style={{ color: '#888' }}>Items</div><div style={{ fontWeight: '600' }}>{s.items.toFixed(1)}</div></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button style={{ ...styles.button, ...styles.secondaryBtn, width: '100%', marginTop: '16px' }} onClick={() => setShowSettlement(false)}>Close</button>
+            </div>
+          </div>
+        );
+      };
+
+      // ============================================
+      // MAIN RENDER
+      // ============================================
+      return (
+        <div style={styles.app}>
+          <header style={styles.header}>
+            <div style={styles.logo}>
+              <span style={{ fontSize: '22px' }}>🌱</span>
+              <div>
+                <div>Valley View Farm</div>
+                <div style={{ fontSize: '9px', opacity: 0.8, fontWeight: '400' }}>{user.role.charAt(0).toUpperCase() + user.role.slice(1)}: {user.name}</div>
+              </div>
+            </div>
+            <div style={styles.tabs}>
+              {availableViews.map(tab => (
+                <button
+                  key={tab.id}
+                  style={{ ...styles.tab, ...(view === tab.id ? styles.tabActive : styles.tabInactive) }}
+                  onClick={() => setView(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <button style={{ ...styles.button, background: 'rgba(255,255,255,0.15)', color: 'white', fontSize: '11px' }} onClick={logout}>
+              Logout
+            </button>
+          </header>
+
+          {view === 'pos' && renderPOS()}
+          {view === 'kiosk' && renderKiosk()}
+          {view === 'vendors' && renderVendors()}
+          {view === 'inventory' && renderInventory()}
+          {view === 'admin' && renderAdmin()}
+
+          {editingProduct !== null && <ProductEditModal product={editingProduct.id ? editingProduct : null} onClose={() => setEditingProduct(null)} />}
+          {editingVendor !== null && <VendorEditModal vendor={editingVendor.id ? editingVendor : null} onClose={() => setEditingVendor(null)} />}
+          {showPayment && <PaymentModal />}
+          {showDevices && <DeviceConfigModal onClose={() => setShowDevices(false)} />}
+          {showSettlement && <SettlementModal />}
+        </div>
+      );
+    }
+
+    // ============================================
+    // APP ROOT
+    // ============================================
+    function App() {
+      return (
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      );
+    }
+
+    function AppContent() {
+      const { user, loading } = useAuth();
+      
+      if (loading) {
+        return <div className="loading">Loading...</div>;
+      }
+      
+      return user ? <MainApp /> : <LoginScreen />;
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
